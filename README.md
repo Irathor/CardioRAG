@@ -4,10 +4,12 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 1 — PDF ingestion. Documents are extracted page-by-page with typed metadata
-and traceability, plus detection of common extraction problems (empty pages, duplicated
-headers/footers, hyphenation artifacts, broken line wrapping, excessive whitespace). Cleaning,
-chunking, embeddings, retrieval, and generation are not implemented yet.
+**Status:** Phase 2 — text cleaning. Documents are extracted page-by-page with typed metadata
+and traceability (Phase 1), then conservatively cleaned: soft/discretionary hyphens and
+line-wrap hyphenation are reconstructed, wrapped lines are rejoined into paragraphs, running
+headers/footers are stripped, and whitespace is normalized — while `raw_text` is always kept
+alongside `cleaned_text` for traceability. Chunking, embeddings, retrieval, and generation are
+not implemented yet.
 
 CardioRAG is a research/educational project. It is **not** a medical diagnostic system and its
 output must never be treated as medical advice.

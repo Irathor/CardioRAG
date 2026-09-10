@@ -30,6 +30,10 @@ class PageContent(BaseModel):
     raw_text: str
     char_count: int
     is_empty: bool
+    # Populated by cleaner.clean_document (Phase 2). raw_text is never
+    # overwritten, so the original extraction is always available for
+    # comparison/debugging.
+    cleaned_text: str | None = None
 
 
 class DocumentMetadata(BaseModel):

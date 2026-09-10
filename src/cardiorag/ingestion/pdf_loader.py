@@ -16,6 +16,11 @@ from pathlib import Path
 import pymupdf
 
 from cardiorag.ingestion.metadata import extract_metadata
+from cardiorag.ingestion.text_analysis import (
+    HEADER_FOOTER_MIN_REPEATS,
+    find_repeated_first_lines,
+    find_repeated_last_lines,
+)
 from cardiorag.models import (
     Document,
     ExtractionIssue,
@@ -34,9 +39,6 @@ WHITESPACE_RATIO_THRESHOLD = 0.4
 # Average line length below this suggests text was extracted one short line at a
 # time (typical of a two-column layout read without column awareness).
 SHORT_LINE_AVG_THRESHOLD = 40
-# A first/last line repeated on at least this many pages is a running header/footer,
-# not a coincidence.
-HEADER_FOOTER_MIN_REPEATS = 3
 
 HYPHENATION_PATTERN = re.compile(r"[a-z]-\n[a-z]")
 
@@ -57,7 +59,7 @@ def _extract_raw_pages(
         try:
             text = doc[page_index].get_text("text")
         except Exception as exc:  # PyMuPDF can raise on malformed page objects
-            logger.warning("Failed to extract page %d of %s: %s", page_number, filename, exc)
+            logger.exception("Failed to extract page %d of %s", page_number, filename)
             issues.append(
                 ExtractionIssue(
                     issue_type=ExtractionIssueType.PAGE_EXTRACTION_ERROR,
@@ -70,54 +72,79 @@ def _extract_raw_pages(
     return raw_pages, issues
 
 
+def _check_empty_page(text: str, page_number: int) -> ExtractionIssue | None:
+    non_ws_chars = len(re.sub(r"\s", "", text))
+    if non_ws_chars < MIN_MEANINGFUL_CHARS:
+        return ExtractionIssue(
+            issue_type=ExtractionIssueType.EMPTY_PAGE,
+            page_number=page_number,
+            detail=f"{non_ws_chars} non-whitespace characters",
+        )
+    return None
+
+
+def _check_excessive_whitespace(text: str, page_number: int) -> ExtractionIssue | None:
+    if not text:
+        return None
+    non_ws_chars = len(re.sub(r"\s", "", text))
+    ws_ratio = 1 - (non_ws_chars / len(text))
+    if ws_ratio > WHITESPACE_RATIO_THRESHOLD:
+        return ExtractionIssue(
+            issue_type=ExtractionIssueType.EXCESSIVE_WHITESPACE,
+            page_number=page_number,
+            detail=f"whitespace ratio {ws_ratio:.2f}",
+        )
+    return None
+
+
+def _check_hyphenation(text: str, page_number: int) -> ExtractionIssue | None:
+    hyphen_matches = HYPHENATION_PATTERN.findall(text)
+    if hyphen_matches:
+        return ExtractionIssue(
+            issue_type=ExtractionIssueType.HYPHENATION_ARTIFACT,
+            page_number=page_number,
+            detail=f"{len(hyphen_matches)} hyphenated line breaks",
+        )
+    return None
+
+
+def _check_broken_line_wrapping(text: str, page_number: int) -> ExtractionIssue | None:
+    lines = [line for line in text.split("\n") if line.strip()]
+    if not lines:
+        return None
+    avg_line_len = sum(len(line) for line in lines) / len(lines)
+    if avg_line_len < SHORT_LINE_AVG_THRESHOLD:
+        return ExtractionIssue(
+            issue_type=ExtractionIssueType.BROKEN_LINE_WRAPPING,
+            page_number=page_number,
+            detail=f"avg line length {avg_line_len:.1f} chars",
+        )
+    return None
+
+
+# Checks run on every non-empty page. An empty page short-circuits these:
+# whitespace ratio, hyphenation, and line-length stats aren't meaningful on it.
+_PAGE_ISSUE_CHECKS = (
+    _check_excessive_whitespace,
+    _check_hyphenation,
+    _check_broken_line_wrapping,
+)
+
+
 def _detect_page_level_issues(raw_pages: list[str]) -> list[ExtractionIssue]:
     issues: list[ExtractionIssue] = []
     for i, text in enumerate(raw_pages):
         page_number = i + 1
-        non_ws_chars = len(re.sub(r"\s", "", text))
 
-        if non_ws_chars < MIN_MEANINGFUL_CHARS:
-            issues.append(
-                ExtractionIssue(
-                    issue_type=ExtractionIssueType.EMPTY_PAGE,
-                    page_number=page_number,
-                    detail=f"{non_ws_chars} non-whitespace characters",
-                )
-            )
-            continue  # other heuristics aren't meaningful on a near-empty page
+        empty_issue = _check_empty_page(text, page_number)
+        if empty_issue:
+            issues.append(empty_issue)
+            continue
 
-        if len(text) > 0:
-            ws_ratio = 1 - (non_ws_chars / len(text))
-            if ws_ratio > WHITESPACE_RATIO_THRESHOLD:
-                issues.append(
-                    ExtractionIssue(
-                        issue_type=ExtractionIssueType.EXCESSIVE_WHITESPACE,
-                        page_number=page_number,
-                        detail=f"whitespace ratio {ws_ratio:.2f}",
-                    )
-                )
-
-        hyphen_matches = HYPHENATION_PATTERN.findall(text)
-        if hyphen_matches:
-            issues.append(
-                ExtractionIssue(
-                    issue_type=ExtractionIssueType.HYPHENATION_ARTIFACT,
-                    page_number=page_number,
-                    detail=f"{len(hyphen_matches)} hyphenated line breaks",
-                )
-            )
-
-        lines = [line for line in text.split("\n") if line.strip()]
-        if lines:
-            avg_line_len = sum(len(line) for line in lines) / len(lines)
-            if avg_line_len < SHORT_LINE_AVG_THRESHOLD:
-                issues.append(
-                    ExtractionIssue(
-                        issue_type=ExtractionIssueType.BROKEN_LINE_WRAPPING,
-                        page_number=page_number,
-                        detail=f"avg line length {avg_line_len:.1f} chars",
-                    )
-                )
+        for check in _PAGE_ISSUE_CHECKS:
+            issue = check(text, page_number)
+            if issue:
+                issues.append(issue)
 
     return issues
 
@@ -130,36 +157,25 @@ def _detect_repeated_headers_footers(raw_pages: list[str]) -> list[ExtractionIss
     if len(raw_pages) < HEADER_FOOTER_MIN_REPEATS:
         return issues
 
-    first_lines: dict[str, list[int]] = {}
-    last_lines: dict[str, list[int]] = {}
-    for i, text in enumerate(raw_pages):
-        lines = [line.strip() for line in text.split("\n") if line.strip()]
-        if not lines:
-            continue
-        first_lines.setdefault(lines[0], []).append(i + 1)
-        last_lines.setdefault(lines[-1], []).append(i + 1)
-
-    for line, pages in first_lines.items():
-        if len(pages) >= HEADER_FOOTER_MIN_REPEATS:
-            for page_number in pages:
-                issues.append(
-                    ExtractionIssue(
-                        issue_type=ExtractionIssueType.DUPLICATED_HEADER,
-                        page_number=page_number,
-                        detail=line[:80],
-                    )
+    for line, pages in find_repeated_first_lines(raw_pages).items():
+        for page_number in pages:
+            issues.append(
+                ExtractionIssue(
+                    issue_type=ExtractionIssueType.DUPLICATED_HEADER,
+                    page_number=page_number,
+                    detail=line[:80],
                 )
+            )
 
-    for line, pages in last_lines.items():
-        if len(pages) >= HEADER_FOOTER_MIN_REPEATS:
-            for page_number in pages:
-                issues.append(
-                    ExtractionIssue(
-                        issue_type=ExtractionIssueType.DUPLICATED_FOOTER,
-                        page_number=page_number,
-                        detail=line[:80],
-                    )
+    for line, pages in find_repeated_last_lines(raw_pages).items():
+        for page_number in pages:
+            issues.append(
+                ExtractionIssue(
+                    issue_type=ExtractionIssueType.DUPLICATED_FOOTER,
+                    page_number=page_number,
+                    detail=line[:80],
                 )
+            )
 
     return issues
 
@@ -220,7 +236,7 @@ def load_corpus(corpus_dir: Path) -> IngestionResult:
         try:
             result.documents.append(load_pdf(pdf_path))
         except ValueError as exc:
-            logger.error("Skipping %s: %s", pdf_path.name, exc)
+            logger.exception("Skipping %s", pdf_path.name)
             result.failures.append(IngestionFailure(filename=pdf_path.name, error=str(exc)))
 
     total_pages = sum(len(d.pages) for d in result.documents)
