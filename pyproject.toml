@@ -24,13 +24,17 @@ dependencies = [
 ingestion = [
     "pymupdf>=1.24",
 ]
-# Phase 3-5: chunking / embeddings / vector index
+# Phase 3: chunking needs the embedding model's real tokenizer for accurate
+# token counts, but not the model weights themselves — transformers alone
+# pulls in tokenizers (Rust) without requiring torch.
+tokenization = [
+    "transformers>=4.42",
+]
+# Phase 4-5: embeddings / vector index
 ml = [
     "torch>=2.3",
-    "transformers>=4.42",
     "sentence-transformers>=3.0",
     "faiss-cpu>=1.8",
-    "tiktoken>=0.7",
 ]
 # Phase 15: REST API
 api = [

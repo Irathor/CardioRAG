@@ -52,6 +52,17 @@ class Document(BaseModel):
     issues: list[ExtractionIssue] = Field(default_factory=list)
 
 
+class Chunk(BaseModel):
+    chunk_id: str
+    document_id: str
+    text: str
+    token_count: int
+    page_numbers: list[int]  # 1+ pages this chunk's text was drawn from, sorted
+    title: str | None = None
+    doi: str | None = None
+    source_filename: str
+
+
 class IngestionFailure(BaseModel):
     filename: str
     error: str

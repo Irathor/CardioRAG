@@ -4,11 +4,13 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 2 — text cleaning. Documents are extracted page-by-page with typed metadata
-and traceability (Phase 1), then conservatively cleaned: soft/discretionary hyphens and
-line-wrap hyphenation are reconstructed, wrapped lines are rejoined into paragraphs, running
-headers/footers are stripped, and whitespace is normalized — while `raw_text` is always kept
-alongside `cleaned_text` for traceability. Chunking, embeddings, retrieval, and generation are
+**Status:** Phase 3 — chunking. Cleaned documents (Phases 1-2) are split into overlapping,
+token-bounded chunks using the actual embedding model's tokenizer (not a character count or a
+generic approximation), so a "512-token chunk" means exactly what the embedding model will see.
+Each chunk carries full citation metadata (document id, title, DOI, source filename, and every
+page it was drawn from — a chunk may legitimately span a page boundary). `scripts/compare_chunking_configs.py`
+compares chunk_size/overlap configurations against the real corpus; which one retrieves best is
+decided empirically once an index exists (Phase 12). Embeddings, retrieval, and generation are
 not implemented yet.
 
 CardioRAG is a research/educational project. It is **not** a medical diagnostic system and its
