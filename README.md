@@ -4,18 +4,19 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 5 — vector index. Embeddings (Phase 4) are indexed with FAISS
-(`src/cardiorag/retrieval/vector_store.py`) using exact inner-product search (`IndexFlatIP`):
-since every embedding is L2-normalized, inner product *is* cosine similarity, so no
-cosine-specific index is needed. The index and its aligned chunk metadata persist together to
-`indexes/` (`scripts/build_index.py`) and are always loaded/saved as a pair, so they can never
-silently drift out of sync. Turning a text question into a query vector, and everything after
-that, is Phase 6 (retrieval) — this phase only does vector-to-vector search and metadata lookup.
+**Status:** Phase 6 — retrieval. `src/cardiorag/retrieval/retriever.py` closes the query loop:
+question text -> embed with the same model the index was built with -> FAISS search -> ranked
+`RetrievedChunk` results (chunk + similarity score). `Retriever` validates that the embedder's
+output dimension matches the index's at construction time, so a model/index mismatch fails
+immediately instead of returning meaningless scores. `top_k` is a plain parameter of `retrieve()`;
+`scripts/compare_top_k.py` shows how score decay and source diversity change across
+top_k in {3, 5, 10, 20} on the real index — not a quality measurement (Recall@K etc. needs the
+ground-truth dataset from Phase 11), just what varying it actually returns.
 
-Known limitation surfaced during manual verification: nearest-neighbor results can include
-bibliography/reference-list text (it shares vocabulary with the query but isn't a substantive
-claim) — worth revisiting once reranking (Phase 7) and evaluation (Phase 12) exist. Generation
-is not implemented yet.
+Known limitations (see the full list with remediation options requested separately): nearest-neighbor
+results can surface bibliography/reference-list text; embedding scores (0.5-0.7 cosine similarity)
+suggest a general-purpose model may be under-discriminating on specialized medical vocabulary.
+Reranking and generation are not implemented yet.
 
 CardioRAG is a research/educational project. It is **not** a medical diagnostic system and its
 output must never be treated as medical advice.

@@ -63,6 +63,11 @@ class Chunk(BaseModel):
     source_filename: str
 
 
+class RetrievedChunk(BaseModel):
+    chunk: Chunk
+    score: float
+
+
 class IngestionFailure(BaseModel):
     filename: str
     error: str
