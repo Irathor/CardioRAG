@@ -4,7 +4,18 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 10 — scientific citations. `src/cardiorag/generation/citations.py` adds two
+**Status:** Phase 11 — evaluation dataset. `data/evaluation/eval_dataset.jsonl` holds 38
+hand-authored, manually-verified questions (17 factual, 7 comparison, 3 synthesis, 3 multi-paper,
+4 no-evidence, 4 misleading) built by actually reading the corpus's cleaned text and spot-checking
+facts against the extracted page content — not fabricated from general knowledge. Each example
+carries expected document id(s)/page(s), a reference answer, and an answerability label.
+`tests/evaluation/test_dataset.py` validates structure (id uniqueness, category coverage,
+consistency between `answerable` and expected sources) and cross-checks every referenced
+document id against the *live* corpus, so a changed PDF would be caught rather than silently
+going stale. This produces ground truth for Phase 12 (retrieval metrics) — no Recall@K/MRR is
+computed yet.
+
+Phase 10 (citations) added `src/cardiorag/generation/citations.py`, which adds two
 things that don't depend on the LLM: (1) mechanical verification — extracting every `[Source N]`
 marker from generated text and flagging any N outside the range of sources actually provided, so
 "never invent citations" is checked, not just requested in the prompt; (2) `build_citation_list()`,

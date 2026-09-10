@@ -68,6 +68,25 @@ class RetrievedChunk(BaseModel):
     score: float
 
 
+class EvaluationCategory(str, Enum):
+    FACTUAL = "factual"
+    COMPARISON = "comparison"
+    SYNTHESIS = "synthesis"
+    MULTI_PAPER = "multi_paper"
+    NO_EVIDENCE = "no_evidence"
+    MISLEADING = "misleading"
+
+
+class EvaluationExample(BaseModel):
+    id: str
+    question: str
+    category: EvaluationCategory
+    expected_document_ids: list[str] = Field(default_factory=list)
+    expected_pages: list[int] = Field(default_factory=list)
+    reference_answer: str
+    answerable: bool
+
+
 class Citation(BaseModel):
     """A presentation-ready citation for one document, merging every chunk
     from that document that contributed to an answer. Built strictly from
