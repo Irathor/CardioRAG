@@ -4,21 +4,23 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 7 — reranking. `src/cardiorag/retrieval/reranker.py` adds a cross-encoder
-second stage (`cross-encoder/ms-marco-MiniLM-L-6-v2`): unlike the bi-encoder used for dense
-retrieval, a cross-encoder scores `[query, passage]` jointly through the transformer's attention
-instead of comparing independently-computed vectors, at the cost of not being precomputable —
-it only runs on the small candidate set dense retrieval already narrowed down (e.g. top-20 -> top-5).
+**Status:** Phase 8-9 — grounded generation + LLM provider abstraction. `src/cardiorag/generation/`
+builds the evidence context (`[Source N]` blocks with title/page/DOI kept bound to their text),
+enforces a strict system prompt (answer only from sources, refuse explicitly when evidence is
+insufficient, never invent citations, flag disagreement between sources, non-diagnostic
+disclaimer), and calls an injected `LLMProvider` (Phase 9's abstraction) to generate the answer.
+Only `OpenAIProvider` is implemented so far; `huggingface_local`/`ollama` raise
+`NotImplementedError` rather than fake support. If zero chunks were retrieved, the system refuses
+before ever calling the LLM. `scripts/ask.py` runs the full pipeline end-to-end
+(retrieve -> rerank -> generate) — **not yet tested against a real LLM call**: it requires
+`OPENAI_API_KEY`, which isn't configured in this environment. Verified instead that it fails
+fast with a clear error when the key is missing, rather than failing deep inside an HTTP call.
 
-**Honest experimental finding** (`scripts/compare_reranking.py`, run against the real index):
-reranking did **not** cleanly fix the bibliography/citation-list problem noted in Phase 5/6 — a
-targeted unit test with two clearly-contrasted texts showed the cross-encoder *can* prefer
-substantive explanation over a citation, but on the real corpus's actual (messier) chunk
-boundaries, citation-adjacent text still ranked highly after reranking. This is the Phase 7
-warning made concrete: added complexity (a second model, ~0.9s extra latency for 20 candidates)
-did not obviously improve results here. The more likely fix is upstream, in chunking
-(filtering/flagging reference sections) — see the limitations list. Quantitative confirmation
-either way needs Phase 12's ground-truth evaluation. Generation is not implemented yet.
+Phase 7 (reranking) added a cross-encoder second stage, with an honest experimental finding worth
+keeping in mind for the sources this pipeline surfaces: reranking did **not** cleanly fix the
+bibliography/citation-list problem noted in Phase 5/6 on the real corpus's messier chunk
+boundaries — added complexity didn't obviously improve results there. See the limitations list
+for remediation options (most likely fix is upstream, in chunking).
 
 CardioRAG is a research/educational project. It is **not** a medical diagnostic system and its
 output must never be treated as medical advice.

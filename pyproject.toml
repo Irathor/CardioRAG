@@ -36,6 +36,10 @@ ml = [
     "sentence-transformers>=3.0",
     "faiss-cpu>=1.8",
 ]
+# Phase 8-9: grounded generation / LLM provider abstraction (OpenAI backend)
+llm = [
+    "openai>=1.0",
+]
 # Phase 15: REST API
 api = [
     "fastapi>=0.111",
