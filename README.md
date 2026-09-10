@@ -4,7 +4,8 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 12 — retrieval evaluation. `src/cardiorag/evaluation/retrieval_metrics.py`
+**Status:** Phase 12 — retrieval evaluation, plus a working second LLM provider (Groq) added
+ahead of Phase 13. `src/cardiorag/evaluation/retrieval_metrics.py`
 (Hit Rate, Precision@K, Recall@K, MRR, nDCG) and `evaluator.py` (relevance judged by
 document+page overlap, not exact chunk_id, since chunk boundaries shift across chunk_size
 configs) measure retrieval against the Phase 11 ground truth. `scripts/evaluate_retrieval.py`
@@ -61,6 +62,15 @@ of a *different* kind - author-affiliation lists and copyright/licensing boilerp
 in this journal is cited, in accordance with accepted academic practice..."). The references fix
 solved exactly what it targeted; front-matter boilerplate is a related but distinct problem,
 still open.
+
+**Groq added as a second working LLM provider** (`llm_provider=groq` in `.env`), ahead of
+Phase 13. Groq exposes an OpenAI-API-compatible endpoint, so it reuses `OpenAIProvider` with a
+different `base_url` instead of needing new provider code - exactly what Phase 9's abstraction
+was for. First real end-to-end run (`scripts/ask.py`) generated a grounded, multi-source answer
+citing `[Source 1]`-`[Source 5]`, verified against Phase 10's citation checker with **zero
+hallucinated citations**. Note: Groq's available model catalog changes over time and didn't match
+commonly-cited model IDs from documentation/examples - `client.models.list()` is what actually
+determined the working `GROQ_MODEL` default here, not an assumption.
 
 Underneath, Phase 11 — evaluation dataset. `data/evaluation/eval_dataset.jsonl` holds 38
 hand-authored, manually-verified questions (17 factual, 7 comparison, 3 synthesis, 3 multi-paper,

@@ -20,9 +20,15 @@ class Settings(BaseSettings):
     )
 
     # --- LLM provider ---
-    llm_provider: Literal["openai", "huggingface_local", "ollama"] = "openai"
+    llm_provider: Literal["openai", "groq", "huggingface_local", "ollama"] = "openai"
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
+    # Groq hosts open models behind an OpenAI-API-compatible endpoint, so it
+    # reuses OpenAIProvider with a different base_url - no new provider class
+    # needed, just different configuration (proof that Phase 9's abstraction
+    # actually works across unrelated backends).
+    groq_api_key: str | None = None
+    groq_model: str = "openai/gpt-oss-120b"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3"
 

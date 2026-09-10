@@ -19,6 +19,12 @@ from cardiorag.retrieval.retriever import load_retriever
 
 logging.basicConfig(level=logging.WARNING)
 
+# Windows consoles often default to cp1252, which can't encode characters an
+# LLM commonly emits (curly quotes, non-breaking hyphens, etc.). Force UTF-8
+# on stdout so a real generated answer never crashes the demo script.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 DEFAULT_QUESTION = "How does artificial intelligence improve cardiac MRI segmentation?"
 
 

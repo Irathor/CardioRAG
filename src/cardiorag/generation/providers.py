@@ -1,17 +1,23 @@
 """LLM provider abstraction (Phase 9): interchangeable text-generation
 backends behind one interface, so generator.py never depends on which
-concrete provider (OpenAI, a local Hugging Face model, Ollama...) is
+concrete provider (OpenAI, Groq, a local Hugging Face model, Ollama...) is
 actually answering the question.
 
-Only OpenAIProvider is implemented so far. The others in
-Settings.llm_provider's type are declared but intentionally raise
-NotImplementedError - we don't fabricate support that doesn't exist yet.
+Only OpenAIProvider is implemented as an actual class, but it also serves
+Groq (and would serve a local vLLM/Ollama server) since they all expose the
+same OpenAI-shaped chat completions API - proof the abstraction works
+across genuinely different backends without new provider code, just
+different configuration. huggingface_local and a native Ollama client (its
+own, non-OpenAI-compatible API) intentionally raise NotImplementedError -
+we don't fabricate support that doesn't exist yet.
 """
 
 import logging
 from typing import Protocol
 
 logger = logging.getLogger(__name__)
+
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 
 class LLMProvider(Protocol):
@@ -58,7 +64,17 @@ def load_provider_from_settings(settings) -> LLMProvider:
             )
         return OpenAIProvider(model=settings.openai_model, api_key=settings.openai_api_key)
 
+    if settings.llm_provider == "groq":
+        if not settings.groq_api_key:
+            raise ValueError(
+                "GROQ_API_KEY is not set; cannot use the 'groq' LLM provider. "
+                "Set it in .env or choose a different llm_provider."
+            )
+        return OpenAIProvider(
+            model=settings.groq_model, api_key=settings.groq_api_key, base_url=GROQ_BASE_URL
+        )
+
     raise NotImplementedError(
         f"LLM provider {settings.llm_provider!r} is not implemented yet. "
-        "Only 'openai' is currently supported."
+        "Only 'openai' and 'groq' are currently supported."
     )

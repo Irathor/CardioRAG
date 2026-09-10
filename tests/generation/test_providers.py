@@ -60,6 +60,40 @@ def test_load_provider_from_settings_raises_without_api_key():
         load_provider_from_settings(settings)
 
 
+def test_load_provider_from_settings_raises_without_groq_api_key():
+    from cardiorag.config import Settings
+
+    settings = Settings(_env_file=None, llm_provider="groq", groq_api_key=None)
+
+    with pytest.raises(ValueError, match="GROQ_API_KEY"):
+        load_provider_from_settings(settings)
+
+
+def test_load_provider_from_settings_builds_groq_via_openai_provider(monkeypatch):
+    from cardiorag.config import Settings
+    from cardiorag.generation.providers import GROQ_BASE_URL
+
+    captured = {}
+
+    class _FakeOpenAIClient:
+        def __init__(self, api_key=None, base_url=None):
+            captured["api_key"] = api_key
+            captured["base_url"] = base_url
+            self.chat = None
+
+    monkeypatch.setattr("openai.OpenAI", _FakeOpenAIClient)
+
+    settings = Settings(
+        _env_file=None, llm_provider="groq", groq_api_key="fake-groq-key", groq_model="llama-3.3-70b-versatile"
+    )
+    provider = load_provider_from_settings(settings)
+
+    assert isinstance(provider, OpenAIProvider)
+    assert provider.model == "llama-3.3-70b-versatile"
+    assert captured["api_key"] == "fake-groq-key"
+    assert captured["base_url"] == GROQ_BASE_URL
+
+
 def test_load_provider_from_settings_raises_for_unimplemented_provider():
     from cardiorag.config import Settings
 
