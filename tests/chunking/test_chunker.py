@@ -120,6 +120,25 @@ def test_chunk_document_falls_back_to_raw_text_when_uncleaned(fake_tokenizer):
     assert chunks[0].text == "alpha beta gamma"
 
 
+def test_chunk_document_skips_pages_marked_as_references(fake_tokenizer):
+    body_page = PageContent(
+        page_number=1, raw_text="w0 w1 w2 w3", char_count=11, is_empty=False,
+        cleaned_text="w0 w1 w2 w3",
+    )
+    references_page = PageContent(
+        page_number=2, raw_text="w4 w5 w6 w7", char_count=11, is_empty=False,
+        cleaned_text="w4 w5 w6 w7", is_references_section=True,
+    )
+    metadata = DocumentMetadata(filename="f.pdf", num_pages=2)
+    document = Document(document_id="doc3", metadata=metadata, pages=[body_page, references_page])
+
+    chunks = chunk_document(document, ChunkingConfig(chunk_size=10, chunk_overlap=0))
+
+    assert len(chunks) == 1
+    assert "w4" not in chunks[0].text
+    assert 2 not in chunks[0].page_numbers
+
+
 # --- Integration test against the real embedding-model tokenizer (no fake_tokenizer fixture) ---
 
 

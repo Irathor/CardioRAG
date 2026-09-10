@@ -34,6 +34,12 @@ class PageContent(BaseModel):
     # overwritten, so the original extraction is always available for
     # comparison/debugging.
     cleaned_text: str | None = None
+    # True for this page and every later page once a standalone "References"
+    # (or "Bibliography") heading line is found. Chunking skips these pages
+    # entirely - a bibliography entry sharing vocabulary with a question is
+    # not evidence, and indexing it just competes with real evidence at
+    # retrieval time.
+    is_references_section: bool = False
 
 
 class DocumentMetadata(BaseModel):

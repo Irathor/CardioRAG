@@ -94,6 +94,50 @@ def test_load_pdf_flags_duplicated_headers_across_pages(make_pdf):
     assert {i.page_number for i in header_issues} == {1, 2, 3, 4}
 
 
+def test_load_pdf_marks_references_section_and_every_following_page(make_pdf):
+    path = make_pdf(
+        "with_refs.pdf",
+        pages=[
+            "Introduction to the study.",
+            "References",
+            "[1] Smith J. Some citation. Journal 2020.",
+        ],
+    )
+
+    document = load_pdf(path)
+
+    assert document.pages[0].is_references_section is False
+    assert document.pages[1].is_references_section is True
+    assert document.pages[2].is_references_section is True
+
+
+def test_load_pdf_without_references_heading_leaves_all_pages_unflagged(make_pdf):
+    path = make_pdf("no_refs.pdf", pages=["Just body text.", "More body text."])
+
+    document = load_pdf(path)
+
+    assert all(not page.is_references_section for page in document.pages)
+
+
+def test_load_pdf_references_heading_detection_is_case_insensitive(make_pdf):
+    path = make_pdf("caps_refs.pdf", pages=["Body text.", "REFERENCES", "[1] Citation."])
+
+    document = load_pdf(path)
+
+    assert document.pages[1].is_references_section is True
+
+
+def test_load_pdf_does_not_flag_references_mentioned_mid_sentence(make_pdf):
+    path = make_pdf(
+        "mention.pdf",
+        pages=["See the references [12] and [13] for details on this method."],
+    )
+
+    document = load_pdf(path)
+
+    assert document.pages[0].is_references_section is False
+
+
 def test_load_pdf_raises_on_unreadable_file(tmp_path: Path):
     bogus = tmp_path / "not_a_pdf.pdf"
     bogus.write_bytes(b"this is definitely not a pdf file")

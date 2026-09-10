@@ -37,14 +37,30 @@ Chunk size shows a real precision/recall tradeoff (256 tokens: best Hit Rate/MRR
 coverage, the default is now **256 tokens** (`ChunkingConfig` in `chunker.py`) - the persisted
 embeddings/index were rebuilt accordingly (724 chunks, up from 364).
 
-**Caveat found immediately after rebuilding**: a manual spot-check at 256 tokens showed the
-bibliography/reference-list problem (Phase 5-7) got *more* pronounced, not less - 3 of 5 top
-results for a sample query were pure citation entries. Smaller chunks isolate a reference entry
-more cleanly, without surrounding body text to dilute its vocabulary-overlap score. Phase 12's
-relevance criterion (document + page overlap) doesn't distinguish substantive text from
-citation-list text on the same page, so it couldn't have caught this - a real limitation of that
-ground truth, not a miscalculation. The Hit Rate/MRR results are still valid; the citation-quality
-problem is simply orthogonal to what they measure, and remains unresolved.
+**Update - the bibliography problem is now fixed at the source.** A spot-check at 256 tokens
+initially showed the reference-list ranking problem (Phase 5-7) getting *more* pronounced, not
+less. The actual fix: `pdf_loader.py` detects a standalone "References"/"Bibliography" heading
+line in each PDF's RAW text (before cleaning merges it into the citation list, destroying the
+signal) - verified against all 8 real corpus papers with zero false positives, despite each using
+a different citation style ("[1]", "1.", "01.", or unnumbered author-year). Every page from that
+heading onward is flagged `is_references_section=True`, and `chunker.py` now skips those pages
+entirely rather than post-filtering chunks after the fact. Result: **395 chunks instead of
+724** (45% of the previous chunk set was pure bibliography), and re-running Phase 12's evaluation
+confirms a real, measured improvement at the default config, not just a qualitative impression:
+
+| metric | before fix | after fix |
+|---|---:|---:|
+| hit_rate | 0.82 | 0.85 |
+| mrr | 0.61 | 0.63 |
+| precision@k | 0.24 | 0.25 |
+| recall@k | 0.18 | 0.19 |
+| ndcg@k | 0.30 | 0.31 |
+
+**Honest remaining gap**: a qualitative check after the fix still surfaces non-substantive text
+of a *different* kind - author-affiliation lists and copyright/licensing boilerplate ("publication
+in this journal is cited, in accordance with accepted academic practice..."). The references fix
+solved exactly what it targeted; front-matter boilerplate is a related but distinct problem,
+still open.
 
 Underneath, Phase 11 — evaluation dataset. `data/evaluation/eval_dataset.jsonl` holds 38
 hand-authored, manually-verified questions (17 factual, 7 comparison, 3 synthesis, 3 multi-paper,

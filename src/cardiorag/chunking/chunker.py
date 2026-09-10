@@ -45,8 +45,15 @@ def _build_page_text_stream(document: Document) -> tuple[str, list[tuple[int, in
     falling back to raw_text for a page that hasn't been cleaned), and return
     the (char_start, char_end, page_number) ranges needed to attribute each
     resulting chunk back to the page(s) it was drawn from.
+
+    Pages flagged as the references/bibliography section (pdf_loader.py) are
+    skipped entirely: a citation-list entry sharing vocabulary with a query
+    is not evidence, and indexing it only crowds out real evidence at
+    retrieval time.
     """
-    non_empty_pages = [page for page in document.pages if _page_text(page)]
+    non_empty_pages = [
+        page for page in document.pages if _page_text(page) and not page.is_references_section
+    ]
 
     pieces: list[str] = []
     page_ranges: list[tuple[int, int, int]] = []

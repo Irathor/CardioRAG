@@ -42,6 +42,30 @@ SHORT_LINE_AVG_THRESHOLD = 40
 
 HYPHENATION_PATTERN = re.compile(r"[a-z]-\n[a-z]")
 
+# Section headings that mark the start of a bibliography. Matched as an exact,
+# whitespace-stripped line in RAW text - this must run before cleaning, since
+# unwrap_soft_line_breaks (Phase 2) merges the heading into the same paragraph
+# as the first citation, destroying the standalone-line signal that makes
+# this heuristic reliable in the first place.
+_REFERENCES_HEADING_VALUES = {"references", "reference", "bibliography"}
+
+
+def _find_references_section_start(raw_pages: list[str]) -> int | None:
+    """Return the 0-indexed page where a standalone References/Bibliography
+    heading line first appears, or None if no such heading was found.
+
+    Verified against all 8 real papers in this project's corpus with zero
+    false positives/negatives - every one uses "References" as an exact
+    heading line, regardless of citation numbering style ("[1]", "1.",
+    "01.", or unnumbered author-year). Known limitation: a paper using a
+    differently-worded heading (e.g. "Works Cited") would be missed.
+    """
+    for i, text in enumerate(raw_pages):
+        for line in text.split("\n"):
+            if line.strip().lower() in _REFERENCES_HEADING_VALUES:
+                return i
+    return None
+
 
 def compute_document_id(pdf_bytes: bytes) -> str:
     """Content-addressed ID: identical PDF bytes always yield the same ID
@@ -203,12 +227,15 @@ def load_pdf(path: Path) -> Document:
     finally:
         doc.close()
 
+    references_start = _find_references_section_start(raw_pages)
+
     pages = [
         PageContent(
             page_number=i + 1,
             raw_text=text,
             char_count=len(text),
             is_empty=len(re.sub(r"\s", "", text)) < MIN_MEANINGFUL_CHARS,
+            is_references_section=references_start is not None and i >= references_start,
         )
         for i, text in enumerate(raw_pages)
     ]
@@ -218,6 +245,11 @@ def load_pdf(path: Path) -> Document:
         + _detect_page_level_issues(raw_pages)
         + _detect_repeated_headers_footers(raw_pages)
     )
+
+    if references_start is not None:
+        logger.info(
+            "%s: references section starts at page %d/%d", path.name, references_start + 1, len(pages)
+        )
 
     logger.info("Ingested %s: %d pages, %d issues detected", path.name, len(pages), len(issues))
 
