@@ -4,14 +4,18 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 4 — embeddings. Chunks (Phases 1-3) are embedded into normalized dense vectors
-through a swappable `Embedder` abstraction (`src/cardiorag/embeddings/`), batched and running on
-GPU automatically when available (CPU otherwise). Vectors are L2-normalized so the vector index
-(Phase 5) can use inner product as cosine similarity. Embeddings persist to `data/processed/`
-so the corpus is never re-embedded just to start the app. `scripts/compare_embedding_models.py`
-benchmarks a general-purpose model (`all-MiniLM-L6-v2`, 384-dim) against a scientific-paper-specific
-one (SPECTER, 768-dim) on the real corpus — retrieval quality comparison is deferred to Phase 12,
-once a vector index and ground truth exist. Retrieval and generation are not implemented yet.
+**Status:** Phase 5 — vector index. Embeddings (Phase 4) are indexed with FAISS
+(`src/cardiorag/retrieval/vector_store.py`) using exact inner-product search (`IndexFlatIP`):
+since every embedding is L2-normalized, inner product *is* cosine similarity, so no
+cosine-specific index is needed. The index and its aligned chunk metadata persist together to
+`indexes/` (`scripts/build_index.py`) and are always loaded/saved as a pair, so they can never
+silently drift out of sync. Turning a text question into a query vector, and everything after
+that, is Phase 6 (retrieval) — this phase only does vector-to-vector search and metadata lookup.
+
+Known limitation surfaced during manual verification: nearest-neighbor results can include
+bibliography/reference-list text (it shares vocabulary with the query but isn't a substantive
+claim) — worth revisiting once reranking (Phase 7) and evaluation (Phase 12) exist. Generation
+is not implemented yet.
 
 CardioRAG is a research/educational project. It is **not** a medical diagnostic system and its
 output must never be treated as medical advice.
