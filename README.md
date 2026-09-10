@@ -4,7 +4,40 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 11 — evaluation dataset. `data/evaluation/eval_dataset.jsonl` holds 38
+**Status:** Phase 12 — retrieval evaluation. `src/cardiorag/evaluation/retrieval_metrics.py`
+(Hit Rate, Precision@K, Recall@K, MRR, nDCG) and `evaluator.py` (relevance judged by
+document+page overlap, not exact chunk_id, since chunk boundaries shift across chunk_size
+configs) measure retrieval against the Phase 11 ground truth. `scripts/evaluate_retrieval.py`
+ran the full comparison against all 34 answerable questions and saved results to
+`data/evaluation/retrieval_eval_results.csv`:
+
+| experiment | variant | hit_rate | mrr | precision@k | recall@k | ndcg@k |
+|---|---|---:|---:|---:|---:|---:|
+| chunk_size | 256 | 0.82 | 0.61 | 0.24 | 0.18 | 0.30 |
+| chunk_size | 512 | 0.71 | 0.45 | 0.19 | 0.23 | 0.26 |
+| chunk_size | 768 | 0.68 | 0.47 | 0.17 | 0.28 | 0.28 |
+| embedding_model | MiniLM (general) | 0.71 | 0.45 | 0.19 | 0.23 | 0.26 |
+| embedding_model | SPECTER (scientific) | 0.44 | 0.30 | 0.12 | 0.14 | 0.16 |
+| top_k | k=3/5/10/20 | 0.53/0.71/0.82/0.91 | 0.41/0.45/0.47/0.48 | ↓ as k grows | ↑ as k grows | ↑ as k grows |
+| reranking | off | 0.71 | 0.45 | 0.19 | 0.23 | 0.26 |
+| reranking | on (20→5) | 0.85 | 0.71 | 0.29 | 0.36 | 0.43 |
+
+**Two findings that overturn earlier assumptions, with data instead of intuition:**
+1. **SPECTER (scientific-paper-specific) retrieves *worse* than general-purpose MiniLM on every
+   metric.** Plausible reason: SPECTER is trained for document-level (title+abstract) similarity
+   via citation graphs, not fine-grained passage retrieval for question-answering - the actual
+   task here. "Domain-specific" is not automatically "better" without measuring against the
+   actual retrieval task.
+2. **Reranking helps substantially on average** (MRR 0.45 -> 0.71, nDCG 0.26 -> 0.43), reversing
+   the qualitative, single-question impression from Phase 7 that it "didn't obviously help." One
+   example misled; 34 measured questions did not.
+
+Chunk size shows a real precision/recall tradeoff (256 tokens: best Hit Rate/MRR, worst Recall;
+768: opposite) with no single winner - the right choice depends on whether missing evidence or
+diluting precision is worse for the use case. See the limitations list for how this should
+change the project's defaults.
+
+Underneath, Phase 11 — evaluation dataset. `data/evaluation/eval_dataset.jsonl` holds 38
 hand-authored, manually-verified questions (17 factual, 7 comparison, 3 synthesis, 3 multi-paper,
 4 no-evidence, 4 misleading) built by actually reading the corpus's cleaned text and spot-checking
 facts against the extracted page content — not fabricated from general knowledge. Each example
