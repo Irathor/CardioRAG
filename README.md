@@ -4,14 +4,14 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 3 — chunking. Cleaned documents (Phases 1-2) are split into overlapping,
-token-bounded chunks using the actual embedding model's tokenizer (not a character count or a
-generic approximation), so a "512-token chunk" means exactly what the embedding model will see.
-Each chunk carries full citation metadata (document id, title, DOI, source filename, and every
-page it was drawn from — a chunk may legitimately span a page boundary). `scripts/compare_chunking_configs.py`
-compares chunk_size/overlap configurations against the real corpus; which one retrieves best is
-decided empirically once an index exists (Phase 12). Embeddings, retrieval, and generation are
-not implemented yet.
+**Status:** Phase 4 — embeddings. Chunks (Phases 1-3) are embedded into normalized dense vectors
+through a swappable `Embedder` abstraction (`src/cardiorag/embeddings/`), batched and running on
+GPU automatically when available (CPU otherwise). Vectors are L2-normalized so the vector index
+(Phase 5) can use inner product as cosine similarity. Embeddings persist to `data/processed/`
+so the corpus is never re-embedded just to start the app. `scripts/compare_embedding_models.py`
+benchmarks a general-purpose model (`all-MiniLM-L6-v2`, 384-dim) against a scientific-paper-specific
+one (SPECTER, 768-dim) on the real corpus — retrieval quality comparison is deferred to Phase 12,
+once a vector index and ground truth exist. Retrieval and generation are not implemented yet.
 
 CardioRAG is a research/educational project. It is **not** a medical diagnostic system and its
 output must never be treated as medical advice.
