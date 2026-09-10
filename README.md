@@ -4,8 +4,10 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 0 — project scaffolding. No ingestion, retrieval, or generation logic exists
-yet; this commit only establishes structure, configuration, and tooling.
+**Status:** Phase 1 — PDF ingestion. Documents are extracted page-by-page with typed metadata
+and traceability, plus detection of common extraction problems (empty pages, duplicated
+headers/footers, hyphenation artifacts, broken line wrapping, excessive whitespace). Cleaning,
+chunking, embeddings, retrieval, and generation are not implemented yet.
 
 CardioRAG is a research/educational project. It is **not** a medical diagnostic system and its
 output must never be treated as medical advice.
