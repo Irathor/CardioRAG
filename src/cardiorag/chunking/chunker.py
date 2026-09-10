@@ -17,8 +17,14 @@ from cardiorag.models import Chunk, Document
 
 @dataclass(frozen=True)
 class ChunkingConfig:
-    chunk_size: int = 512  # tokens; 512 is also all-MiniLM-L6-v2's max sequence length
-    chunk_overlap: int = 64  # tokens
+    # 256 was chosen over 512/768 based on Phase 12's measured retrieval evaluation:
+    # it gave the best Hit Rate (0.82) and MRR (0.61) of the three sizes tested, at
+    # the cost of the worst Recall (0.18) - a deliberate precision-over-coverage
+    # tradeoff, since citation trustworthiness (finding the *right* passage, ranked
+    # high) matters more here than exhaustively surfacing every relevant passage.
+    # See data/evaluation/retrieval_eval_results.csv for the full comparison.
+    chunk_size: int = 256  # tokens
+    chunk_overlap: int = 32  # tokens
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     def __post_init__(self) -> None:

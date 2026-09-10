@@ -33,9 +33,18 @@ ran the full comparison against all 34 answerable questions and saved results to
    example misled; 34 measured questions did not.
 
 Chunk size shows a real precision/recall tradeoff (256 tokens: best Hit Rate/MRR, worst Recall;
-768: opposite) with no single winner - the right choice depends on whether missing evidence or
-diluting precision is worse for the use case. See the limitations list for how this should
-change the project's defaults.
+768: the reverse). Given the project's emphasis on citation trustworthiness over exhaustive
+coverage, the default is now **256 tokens** (`ChunkingConfig` in `chunker.py`) - the persisted
+embeddings/index were rebuilt accordingly (724 chunks, up from 364).
+
+**Caveat found immediately after rebuilding**: a manual spot-check at 256 tokens showed the
+bibliography/reference-list problem (Phase 5-7) got *more* pronounced, not less - 3 of 5 top
+results for a sample query were pure citation entries. Smaller chunks isolate a reference entry
+more cleanly, without surrounding body text to dilute its vocabulary-overlap score. Phase 12's
+relevance criterion (document + page overlap) doesn't distinguish substantive text from
+citation-list text on the same page, so it couldn't have caught this - a real limitation of that
+ground truth, not a miscalculation. The Hit Rate/MRR results are still valid; the citation-quality
+problem is simply orthogonal to what they measure, and remains unresolved.
 
 Underneath, Phase 11 — evaluation dataset. `data/evaluation/eval_dataset.jsonl` holds 38
 hand-authored, manually-verified questions (17 factual, 7 comparison, 3 synthesis, 3 multi-paper,
