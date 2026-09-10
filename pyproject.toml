@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cardiorag"
+version = "0.1.0"
+description = "Retrieval-Augmented Generation system for cardiovascular magnetic resonance and cardiovascular AI literature"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+
+# Core dependencies needed from Phase 0 onward (config, typed models, env loading).
+# Everything else is grouped into optional extras and installed only when the
+# phase that needs it begins — no point pulling in torch/faiss before we embed anything.
+dependencies = [
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+# Phase 1: PDF ingestion
+ingestion = [
+    "pymupdf>=1.24",
+]
+# Phase 3-5: chunking / embeddings / vector index
+ml = [
+    "torch>=2.3",
+    "transformers>=4.42",
+    "sentence-transformers>=3.0",
+    "faiss-cpu>=1.8",
+    "tiktoken>=0.7",
+]
+# Phase 15: REST API
+api = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+]
+# Phase 16: UI
+ui = [
+    "streamlit>=1.36",
+]
+# Phase 12-13: evaluation
+eval = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "matplotlib>=3.9",
+    "ragas>=0.1",
+]
+dev = [
+    "pytest>=8.2",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cardiorag"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
