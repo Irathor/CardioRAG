@@ -68,6 +68,20 @@ class RetrievedChunk(BaseModel):
     score: float
 
 
+class Citation(BaseModel):
+    """A presentation-ready citation for one document, merging every chunk
+    from that document that contributed to an answer. Built strictly from
+    RetrievedChunk metadata - never from the LLM's free-text output."""
+
+    document_id: str
+    title: str | None = None
+    doi: str | None = None
+    source_filename: str
+    pages: list[int]
+    chunk_ids: list[str]
+    max_score: float
+
+
 class IngestionFailure(BaseModel):
     filename: str
     error: str

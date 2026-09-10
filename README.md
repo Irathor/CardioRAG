@@ -4,17 +4,25 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 8-9 — grounded generation + LLM provider abstraction. `src/cardiorag/generation/`
-builds the evidence context (`[Source N]` blocks with title/page/DOI kept bound to their text),
-enforces a strict system prompt (answer only from sources, refuse explicitly when evidence is
-insufficient, never invent citations, flag disagreement between sources, non-diagnostic
-disclaimer), and calls an injected `LLMProvider` (Phase 9's abstraction) to generate the answer.
-Only `OpenAIProvider` is implemented so far; `huggingface_local`/`ollama` raise
-`NotImplementedError` rather than fake support. If zero chunks were retrieved, the system refuses
-before ever calling the LLM. `scripts/ask.py` runs the full pipeline end-to-end
-(retrieve -> rerank -> generate) — **not yet tested against a real LLM call**: it requires
-`OPENAI_API_KEY`, which isn't configured in this environment. Verified instead that it fails
-fast with a clear error when the key is missing, rather than failing deep inside an HTTP call.
+**Status:** Phase 10 — scientific citations. `src/cardiorag/generation/citations.py` adds two
+things that don't depend on the LLM: (1) mechanical verification — extracting every `[Source N]`
+marker from generated text and flagging any N outside the range of sources actually provided, so
+"never invent citations" is checked, not just requested in the prompt; (2) `build_citation_list()`,
+which groups the flat `RetrievedChunk` list by document (a paper can contribute several chunks)
+into presentation-ready `Citation` objects — built strictly from retrieval metadata, never from
+the LLM's own text. Verified against the real index: the 5 reranked chunks for a sample query
+collapsed into 2 distinct documents, and a deliberately fabricated `[Source 99]` reference was
+correctly flagged as invalid. The UI to actually let a user inspect this (Phase 16) doesn't exist
+yet.
+
+Underneath, Phases 8-9 built grounded generation (`src/cardiorag/generation/`): evidence context
+blocks (`[Source N]` with title/page/DOI kept bound to their text), a strict system prompt
+(evidence-only claims, explicit refusal when insufficient, no invented citations, flag source
+disagreement, non-diagnostic disclaimer), and a swappable `LLMProvider` (Phase 9) — only
+`OpenAIProvider` is implemented so far. `scripts/ask.py` wires the full pipeline
+(retrieve -> rerank -> generate) but **hasn't been tested against a real LLM call yet**: it
+requires `OPENAI_API_KEY`, not configured in this environment. Verified instead that it fails
+fast with a clear error when the key is missing.
 
 Phase 7 (reranking) added a cross-encoder second stage, with an honest experimental finding worth
 keeping in mind for the sources this pipeline surfaces: reranking did **not** cleanly fix the
