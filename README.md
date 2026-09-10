@@ -4,19 +4,21 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 6 — retrieval. `src/cardiorag/retrieval/retriever.py` closes the query loop:
-question text -> embed with the same model the index was built with -> FAISS search -> ranked
-`RetrievedChunk` results (chunk + similarity score). `Retriever` validates that the embedder's
-output dimension matches the index's at construction time, so a model/index mismatch fails
-immediately instead of returning meaningless scores. `top_k` is a plain parameter of `retrieve()`;
-`scripts/compare_top_k.py` shows how score decay and source diversity change across
-top_k in {3, 5, 10, 20} on the real index — not a quality measurement (Recall@K etc. needs the
-ground-truth dataset from Phase 11), just what varying it actually returns.
+**Status:** Phase 7 — reranking. `src/cardiorag/retrieval/reranker.py` adds a cross-encoder
+second stage (`cross-encoder/ms-marco-MiniLM-L-6-v2`): unlike the bi-encoder used for dense
+retrieval, a cross-encoder scores `[query, passage]` jointly through the transformer's attention
+instead of comparing independently-computed vectors, at the cost of not being precomputable —
+it only runs on the small candidate set dense retrieval already narrowed down (e.g. top-20 -> top-5).
 
-Known limitations (see the full list with remediation options requested separately): nearest-neighbor
-results can surface bibliography/reference-list text; embedding scores (0.5-0.7 cosine similarity)
-suggest a general-purpose model may be under-discriminating on specialized medical vocabulary.
-Reranking and generation are not implemented yet.
+**Honest experimental finding** (`scripts/compare_reranking.py`, run against the real index):
+reranking did **not** cleanly fix the bibliography/citation-list problem noted in Phase 5/6 — a
+targeted unit test with two clearly-contrasted texts showed the cross-encoder *can* prefer
+substantive explanation over a citation, but on the real corpus's actual (messier) chunk
+boundaries, citation-adjacent text still ranked highly after reranking. This is the Phase 7
+warning made concrete: added complexity (a second model, ~0.9s extra latency for 20 candidates)
+did not obviously improve results here. The more likely fix is upstream, in chunking
+(filtering/flagging reference sections) — see the limitations list. Quantitative confirmation
+either way needs Phase 12's ground-truth evaluation. Generation is not implemented yet.
 
 CardioRAG is a research/educational project. It is **not** a medical diagnostic system and its
 output must never be treated as medical advice.
