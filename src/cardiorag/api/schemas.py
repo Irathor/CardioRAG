@@ -27,11 +27,24 @@ class QueryRequest(BaseModel):
     retrieve_k: int = Field(default=20, gt=0, description="Candidates pulled before reranking")
 
 
+class CitationWarning(BaseModel):
+    """A verbatim quote the LLM attributed to a real, in-range source, but
+    which does not actually appear in that source's text - a fabricated
+    citation to a genuine source (see generation/citations.py). An empty
+    `citation_warnings` list means none were found, not that none were
+    possible - this check only catches quoted-and-attributed fabrications."""
+
+    source_number: int
+    quoted_text: str
+    match_ratio: float
+
+
 class QueryResponse(BaseModel):
     question: str
     answer: str
     sources: list[SourceInfo]
     latency_ms: int
+    citation_warnings: list[CitationWarning] = Field(default_factory=list)
 
 
 class RetrieveRequest(BaseModel):

@@ -114,6 +114,22 @@ def test_query_returns_grounded_answer_with_sources(client):
     assert body["answer"] == "a grounded answer [Source 1]"
     assert len(body["sources"]) == 2
     assert isinstance(body["latency_ms"], int)
+    assert body["citation_warnings"] == []
+
+
+def test_query_surfaces_citation_warnings_for_a_fabricated_quote(client):
+    class _FabricatingProvider:
+        def generate(self, system_prompt: str, user_prompt: str) -> str:
+            return '[Source 1] states: "a completely fabricated sentence not in any real source."'
+
+    app.dependency_overrides[get_llm_provider] = lambda: _FabricatingProvider()
+
+    response = client.post("/query", json={"question": "a real question", "top_k": 1})
+
+    assert response.status_code == 200
+    warnings = response.json()["citation_warnings"]
+    assert len(warnings) == 1
+    assert warnings[0]["source_number"] == 1
 
 
 def test_query_returns_503_when_llm_provider_misconfigured(client):

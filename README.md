@@ -159,9 +159,10 @@ MiniLM, top_k=5, no reranking as the fixed baseline; see `scripts/evaluate_retri
 \* **Manual inspection (also required by Phase 13, and where the real story was) found this
 number is misleading on its own**: 2 of 4 answers substantively declined to answer but used
 phrasing outside the original keyword list (since fixed); one fabricated a citation attributed to
-a real, in-range source number — a problem Phase 10's citation checker cannot catch, since it
-only validates that a cited number exists, not that the attributed content is real. See
-Limitations.
+a real, in-range source number. At the time, Phase 10's citation checker could not catch this
+kind of fabrication — it only validated that a cited number existed, not that the attributed
+content was real. That gap is now closed (see Technical Decisions / Limitations) by
+`find_fabricated_quotes()`, verified against this exact real fabricated text.
 
 The two generation-evaluation runs are logged as **separate** experiments in
 `experiments.jsonl`, not blended: the last 10 of 38 questions were judged by a smaller fallback
@@ -300,10 +301,16 @@ actually running the system against real data, not anticipated in advance.
 - No minimum chunk-quality filter; a very short or degenerate chunk can still enter the index.
 
 **Retrieval / generation**
-- The citation checker (`generation/citations.py`) validates that a cited `[Source N]` number is
-  in range — it cannot verify that the content attributed to that source is actually there. A
-  real fabricated-citation case was found during Phase 13's manual inspection that this check did
-  not catch.
+- ~~The citation checker validates range but not content~~ **Fixed**: `find_fabricated_quotes()`
+  in `generation/citations.py` now checks every verbatim quote attributed to a `[Source N]`
+  against that source's actual text (exact substring, falling back to longest-common-substring
+  ratio ≥ 0.6), and is wired into `/query`'s `citation_warnings` field and `scripts/ask.py`.
+  Re-ran the exact real fabricated text found during Phase 13's manual inspection against it —
+  correctly flagged (match ratio 0.008). Deliberately LLM-free (deterministic, consistent with
+  the rest of this module) and deliberately narrow: it only catches verbatim
+  quoted-and-attributed fabrications, not paraphrased ones — a paraphrased fabrication would need
+  the LLM-based faithfulness check in `evaluation/generation_metrics.py` instead, which this does
+  not replace.
 - `looks_like_refusal` is a phrase-based heuristic anchored to observed real phrasing, not a
   semantic judgment — a model refusing in genuinely novel wording will be missed.
 - Only `OpenAIProvider` (which also serves Groq) is implemented; `huggingface_local` and a native

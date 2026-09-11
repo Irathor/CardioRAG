@@ -1,6 +1,7 @@
 from cardiorag.generation.citations import (
     build_citation_list,
     extract_cited_source_numbers,
+    find_fabricated_quotes,
     find_invalid_citations,
     find_uncited_sources,
 )
@@ -75,6 +76,91 @@ def test_find_uncited_sources_empty_when_all_cited():
     text = "[Source 1] and [Source 2] both support this."
 
     assert find_uncited_sources(text, num_sources=2) == set()
+
+
+# --- find_fabricated_quotes ---
+
+
+def test_find_fabricated_quotes_catches_the_real_case_found_in_phase_13():
+    # The exact real failure mode found during Phase 13's manual inspection:
+    # a verbatim quote attributed to a real, in-range source, but the quote
+    # does not appear anywhere in that source's actual text.
+    sources = [
+        _make_retrieved(
+            "c0",
+            "docA",
+            [1],
+            text=(
+                "Based on the provided sources, there is no direct information about "
+                "pediatric dosing. Source 1 mentions AI methods for cardiovascular MRI "
+                "but does not specify dosing guidelines."
+            ),
+        )
+    ]
+    answer = (
+        'In general, dosing guidelines are recommended to be based on body weight. '
+        '[Source 1] states: "Gadolinium-based contrast agents are commonly used in '
+        'cardiovascular MRI, and their dosing should be based on body weight."'
+    )
+
+    findings = find_fabricated_quotes(answer, sources)
+
+    assert len(findings) == 1
+    assert findings[0]["source_number"] == 1
+    assert "Gadolinium-based" in findings[0]["quoted_text"]
+
+
+def test_find_fabricated_quotes_accepts_a_genuine_verbatim_quote():
+    sources = [
+        _make_retrieved(
+            "c0",
+            "docA",
+            [2],
+            text=(
+                "T2* mapping is the standard method for detecting and quantifying "
+                "myocardial iron overload, used to guide chelation therapy."
+            ),
+        )
+    ]
+    answer = (
+        '[Source 1] states: "T2* mapping is the standard method for detecting and '
+        'quantifying myocardial iron overload."'
+    )
+
+    assert find_fabricated_quotes(answer, sources) == []
+
+
+def test_find_fabricated_quotes_ignores_short_quotes():
+    sources = [_make_retrieved("c0", "docA", [1], text="Completely unrelated content here.")]
+    answer = '[Source 1] states: "the heart"'  # too short to meaningfully check
+
+    assert find_fabricated_quotes(answer, sources) == []
+
+
+def test_find_fabricated_quotes_ignores_unattributed_quotes():
+    sources = [_make_retrieved("c0", "docA", [1], text="Completely unrelated content here.")]
+    answer = 'Someone once said: "a fabricated quote with no source attribution at all here."'
+
+    assert find_fabricated_quotes(answer, sources) == []
+
+
+def test_find_fabricated_quotes_skips_out_of_range_source_numbers():
+    sources = [_make_retrieved("c0", "docA", [1], text="Some real content.")]
+    answer = '[Source 99] states: "a quote attributed to a source that does not exist at all."'
+
+    # find_invalid_citations already reports the out-of-range number separately;
+    # this function should not also raise/crash on it.
+    assert find_fabricated_quotes(answer, sources) == []
+
+
+def test_find_fabricated_quotes_handles_quote_attributed_after_it():
+    sources = [_make_retrieved("c0", "docA", [1], text="Some real content about cardiac imaging.")]
+    answer = '"A completely different fabricated sentence not found anywhere" [Source 1].'
+
+    findings = find_fabricated_quotes(answer, sources)
+
+    assert len(findings) == 1
+    assert findings[0]["source_number"] == 1
 
 
 # --- build_citation_list ---

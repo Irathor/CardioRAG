@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from cardiorag.config import settings
+from cardiorag.generation.citations import find_fabricated_quotes
 from cardiorag.generation.generator import generate_answer
 from cardiorag.generation.providers import load_provider_from_settings
 from cardiorag.retrieval.reranker import Reranker, retrieve_and_rerank
@@ -45,6 +46,13 @@ def main() -> None:
     for i, source in enumerate(result.sources, start=1):
         chunk = source.chunk
         print(f"  [Source {i}] {chunk.title!r} page(s)={chunk.page_numbers} score={source.score:.3f}")
+
+    fabricated = find_fabricated_quotes(result.answer, result.sources)
+    if fabricated:
+        print("\nWARNING - possible fabricated citation(s):")
+        for f in fabricated:
+            print(f"  [Source {f['source_number']}] quoted text not found in that source "
+                  f"(match ratio {f['match_ratio']:.2f}): {f['quoted_text']!r}")
 
 
 if __name__ == "__main__":

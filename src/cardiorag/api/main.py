@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 
 from cardiorag.api.dependencies import get_llm_provider, get_reranker, get_retriever, get_vector_store
 from cardiorag.api.schemas import (
+    CitationWarning,
     DocumentInfo,
     DocumentsResponse,
     HealthResponse,
@@ -26,6 +27,7 @@ from cardiorag.api.schemas import (
     SourceInfo,
 )
 from cardiorag.config import settings
+from cardiorag.generation.citations import find_fabricated_quotes
 from cardiorag.generation.generator import generate_answer
 from cardiorag.generation.providers import LLMProvider
 from cardiorag.models import RetrievedChunk
@@ -147,12 +149,20 @@ def query(
         logger.exception("Generation failed for question: %r", request.question)
         raise HTTPException(status_code=502, detail="The LLM provider failed to generate an answer.") from exc
 
+    fabricated = find_fabricated_quotes(result.answer, result.sources)
+    if fabricated:
+        logger.warning(
+            "Possible fabricated citation(s) in generated answer",
+            extra={"fabricated_quotes": fabricated, "question": request.question},
+        )
+
     latency_ms = int((time.perf_counter() - start) * 1000)
     return QueryResponse(
         question=result.question,
         answer=result.answer,
         sources=[_to_source_info(r) for r in result.sources],
         latency_ms=latency_ms,
+        citation_warnings=[CitationWarning(**f) for f in fabricated],
     )
 
 
