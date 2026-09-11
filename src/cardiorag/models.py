@@ -107,6 +107,32 @@ class Citation(BaseModel):
     max_score: float
 
 
+class ExperimentRecord(BaseModel):
+    """One row in the experiment log (Phase 14): the full configuration of a
+    retrieval and/or generation experiment plus whatever metrics were
+    actually measured for it. `retrieval_metrics`/`generation_metrics` are
+    open dicts rather than fixed fields because which metrics apply depends
+    on what the experiment measured (a pure retrieval sweep has no
+    faithfulness score, for instance) - forcing every experiment through
+    the same fixed metric columns would mean padding most rows with nulls.
+    """
+
+    experiment_id: str
+    date: str  # ISO date (YYYY-MM-DD)
+    description: str
+    embedding_model: str
+    chunk_size: int
+    chunk_overlap: int
+    retrieval_top_k: int
+    reranking_enabled: bool
+    final_context_size: int
+    generation_model: str | None = None
+    retrieval_metrics: dict[str, float] = Field(default_factory=dict)
+    generation_metrics: dict[str, float] = Field(default_factory=dict)
+    latency_seconds: float | None = None
+    notes: str = ""
+
+
 class IngestionFailure(BaseModel):
     filename: str
     error: str

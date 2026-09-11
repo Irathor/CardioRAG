@@ -4,7 +4,19 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 13 — generation evaluation, run against the real evaluation dataset (all 38
+**Status:** Phase 14 — experiment tracking. Every significant retrieval/generation experiment run
+in Phases 12-13 is now a typed `ExperimentRecord` (`src/cardiorag/models.py`) in
+`data/evaluation/experiments.jsonl` (14 records), instead of living only as ad hoc CSVs with
+"fixed" baseline parameters buried as constants inside each script. `experiment_tracking.py`
+logs/loads records and flattens them into one pandas comparison table
+(`retrieval_<metric>`/`generation_<metric>` columns). Notably, the two generation-evaluation
+experiments from Phase 13 are logged **separately** rather than blended into one average - they
+used different judge LLMs (`qwen/qwen3.8-27b`, JSON-compliant, vs. `allam-2-7b`, a
+free-tier fallback that wasn't) and averaging them would have hidden that the two subsets
+aren't a comparable measurement. This is a backfill of experiments already run
+(`scripts/log_past_experiments.py`), not new experimentation.
+
+Underneath, Phase 13 — generation evaluation, run against the real evaluation dataset (all 38
 questions) through Groq. `src/cardiorag/evaluation/generation_metrics.py` implements faithfulness,
 answer relevance, and context relevance from scratch (LLM-as-judge, inspired by the Ragas paper
 already in this project's own corpus), reusing Phase 10's citation checker and a new
