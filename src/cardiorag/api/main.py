@@ -14,6 +14,7 @@ import uuid
 from collections.abc import Iterator
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from cardiorag.api.auth import require_api_key
@@ -55,6 +56,25 @@ app = FastAPI(
         "NOT a medical diagnostic system; output is not medical advice."
     ),
     version="0.1.0",
+)
+
+# Without this, no browser-based client (the web/ frontend included) can
+# read a response from a different origin - found for real running the web
+# client against a live server, not anticipated in advance. allow_credentials
+# stays False: this API authenticates via an X-API-Key header (api/auth.py),
+# never cookies, so it's compatible with a wildcard origin - CORS governs
+# which browser tabs may read a response, not who may call the API at all.
+_cors_origins = (
+    ["*"]
+    if settings.cors_allowed_origins == "*"
+    else [origin.strip() for origin in settings.cors_allowed_origins.split(",")]
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

@@ -118,6 +118,15 @@ def test_health_reports_index_loaded_and_chunk_count(client):
     assert body["num_chunks"] == 3
 
 
+def test_cors_allows_cross_origin_requests_by_default(client):
+    """Found for real: without CORSMiddleware, no browser-based client
+    (the web/ frontend included) can read a response from a different
+    origin, no matter what the response body/status actually is."""
+    response = client.get("/health", headers={"Origin": "http://localhost:5180"})
+
+    assert response.headers["access-control-allow-origin"] == "*"
+
+
 def test_retrieve_returns_ranked_sources_with_expected_shape(client):
     response = client.post("/retrieve", json={"question": "a real question", "top_k": 2})
 

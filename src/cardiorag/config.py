@@ -74,10 +74,13 @@ class Settings(BaseSettings):
     # --- API ---
     api_host: str = "0.0.0.0"
     api_port: int = 8000
-    # Used by the Streamlit UI (Phase 16) to reach the API server - not the
-    # same value as api_host, which is what the server binds to (0.0.0.0
-    # isn't a valid address to connect *to* from a client).
-    api_base_url: str = "http://localhost:8000"
+    # Comma-separated origins allowed to call this API from a browser, or
+    # "*" for any origin (the default). CORS is not this project's security
+    # boundary - api_key already is - so a permissive default costs nothing
+    # real; it only controls which browser tabs may read a response, not
+    # who may call the API at all (curl/server-to-server calls are never
+    # subject to CORS in the first place).
+    cors_allowed_origins: str = "*"
 
     # --- API security (Phase 20 fix #6) ---
     # A single shared secret, not per-user accounts - appropriate for a small
