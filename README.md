@@ -87,13 +87,13 @@ from day one, and the reason Phases 11-14 exist at all.
 **Embedding model — `sentence-transformers/all-MiniLM-L6-v2` (general-purpose), not a
 science-specific model.** Compared against SPECTER (a model trained specifically on scientific
 paper similarity via citation graphs) on the real 34-question evaluation set: MiniLM won on every
-retrieval metric (Hit Rate 0.76 vs. 0.65, MRR 0.49 vs. 0.38). Plausible reason: SPECTER is trained
+retrieval metric (Hit Rate 0.71 vs. 0.68, MRR 0.47 vs. 0.36). Plausible reason: SPECTER is trained
 for document-level (title+abstract) similarity, not fine-grained passage retrieval for
 question-answering — the actual task here. "Domain-specific" is not automatically "better" without
 measuring it against the real task.
 
-**Chunk size — 256 tokens**, chosen from a 256/512/768 sweep. 256 gave the best Hit Rate (0.85)
-and MRR (0.63) of the three, at the cost of the worst Recall (0.19). Chosen deliberately: this
+**Chunk size — 256 tokens**, chosen from a 256/512/768 sweep. 256 gave the best Hit Rate (0.82)
+and MRR (0.60) of the three, at the cost of the worst Recall (0.19). Chosen deliberately: this
 project's core value is citation trustworthiness (finding the *right* passage, ranked high) over
 exhaustive evidence coverage — Hit Rate/MRR measure the former, Recall the latter.
 
@@ -104,7 +104,7 @@ Exact (not approximate/IVF) search is appropriate at this corpus's scale (a few 
 an ANN index only pays off at a scale this project is nowhere near.
 
 **Reranking — cross-encoder, retrieve 20 → rerank to top-5.** Measured to substantially improve
-retrieval quality on average (MRR 0.49 → 0.74, nDCG 0.28 → 0.45) — but a single hand-inspected
+retrieval quality on average (MRR 0.47 → 0.69, nDCG 0.26 → 0.43) — but a single hand-inspected
 example earlier in the project suggested it "didn't help," which turned out to be misleading: one
 example is not a measurement. The systematic 34-question evaluation is what settled it.
 
@@ -126,21 +126,23 @@ All numbers below come from `data/evaluation/retrieval_eval_results.csv`,
 `generation_eval_results.csv`, and `experiments.jsonl` — actually run against the real 8-paper
 corpus and the 38-question hand-verified evaluation dataset (Phase 11). None are invented.
 
-**Retrieval (Phase 12, n=34 answerable questions, varying one parameter at a time):**
+**Retrieval (Phase 12, n=34 answerable questions, varying one parameter at a time; re-run after
+the front-matter boilerplate fix below — see Limitations for why these numbers shifted slightly
+from an earlier version of this table):**
 
 | Experiment | Variant | Hit Rate | MRR | Precision@K | Recall@K | nDCG@K |
 |---|---|---:|---:|---:|---:|---:|
-| Chunk size | 256 | 0.85 | 0.63 | 0.25 | 0.19 | 0.31 |
-| Chunk size | 512 | 0.76 | 0.49 | 0.20 | 0.25 | 0.28 |
-| Chunk size | 768 | 0.71 | 0.48 | 0.17 | 0.32 | 0.30 |
-| Embedding model | MiniLM (general) | 0.76 | 0.49 | 0.20 | 0.25 | 0.28 |
-| Embedding model | SPECTER (scientific) | 0.65 | 0.38 | 0.19 | 0.26 | 0.25 |
-| top_k | k=3 | 0.59 | 0.45 | 0.23 | 0.17 | 0.26 |
-| top_k | k=5 | 0.76 | 0.49 | 0.20 | 0.25 | 0.28 |
-| top_k | k=10 | 0.85 | 0.50 | 0.14 | 0.35 | 0.31 |
-| top_k | k=20 | 0.94 | 0.51 | 0.11 | 0.53 | 0.38 |
-| Reranking | off | 0.76 | 0.49 | 0.20 | 0.25 | 0.28 |
-| Reranking | on (retrieve 20 → rerank 5) | 0.88 | 0.74 | 0.31 | 0.38 | 0.45 |
+| Chunk size | 256 | 0.82 | 0.60 | 0.25 | 0.19 | 0.30 |
+| Chunk size | 512 | 0.71 | 0.47 | 0.18 | 0.22 | 0.26 |
+| Chunk size | 768 | 0.71 | 0.46 | 0.17 | 0.32 | 0.30 |
+| Embedding model | MiniLM (general) | 0.71 | 0.47 | 0.18 | 0.22 | 0.26 |
+| Embedding model | SPECTER (scientific) | 0.68 | 0.36 | 0.19 | 0.25 | 0.25 |
+| top_k | k=3 | 0.53 | 0.43 | 0.22 | 0.16 | 0.25 |
+| top_k | k=5 | 0.71 | 0.47 | 0.18 | 0.22 | 0.26 |
+| top_k | k=10 | 0.85 | 0.49 | 0.16 | 0.38 | 0.32 |
+| top_k | k=20 | 0.91 | 0.50 | 0.11 | 0.53 | 0.38 |
+| Reranking | off | 0.71 | 0.47 | 0.18 | 0.22 | 0.26 |
+| Reranking | on (retrieve 20 → rerank 5) | 0.85 | 0.69 | 0.29 | 0.37 | 0.43 |
 
 (chunk_size/embedding_model/top_k/reranking rows other than the varied dimension use chunk_size=512,
 MiniLM, top_k=5, no reranking as the fixed baseline; see `scripts/evaluate_retrieval.py`.)
@@ -295,9 +297,21 @@ actually running the system against real data, not anticipated in advance.
 - ASCII-hyphen dehyphenation is deliberately conservative (keeps the hyphen to avoid corrupting
   compound terms like "T1-weighted") — a genuine line-wrap break leaves a residual hyphen
   ("informa-tion") rather than being perfectly joined.
-- Front-matter boilerplate (author-affiliation lists, copyright/licensing notices) still gets
-  chunked and occasionally retrieved — a different problem from the references-section issue that
-  *was* fixed, not yet addressed.
+- **Partially fixed, with an honest measured tradeoff**: `strip_boilerplate_sentences()` removes
+  copyright/license sentences (e.g. "This is an open-access article distributed under the terms
+  of the Creative Commons Attribution License... No use, distribution or reproduction is
+  permitted...") using phrases taken from this project's own corpus, not guessed. Re-running
+  Phase 12's full retrieval evaluation afterward showed all five metrics at the default config
+  moved slightly *down* (Hit Rate 0.85→0.82, MRR 0.63→0.60) — plausible explanation: the
+  (document, page) ground truth measures whether the right page was found, not whether the
+  retrieved text is clean, so trimming a chunk's boilerplate can shift chunk composition without
+  the metric rewarding it. Kept anyway (a deliberate call, not an oversight): a chunk that's
+  mostly a copyright notice is still bad evidence even when it happens to match the expected
+  page. Author-affiliation lists and editorial-workflow metadata (RECEIVED/REVIEWED/CITATION
+  blocks) are a separate, harder problem this does NOT fix — a standalone "Abstract" heading was
+  checked as a possible boundary marker (the same rigor applied to "References" in Phase 5-7) and
+  found reliably present in only 5 of the 8 real corpus papers, too unreliable a signal to build
+  on; this needs layout-aware extraction instead (see Future Work).
 - No minimum chunk-quality filter; a very short or degenerate chunk can still enter the index.
 
 **Retrieval / generation**

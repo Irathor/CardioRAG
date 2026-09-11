@@ -33,6 +33,29 @@ _SOFT_HYPHEN_LINEBREAK_RE = re.compile("\xad\n")
 _RUN_OF_SPACES_RE = re.compile(r"[ \t]+")
 _BLANK_LINE_RUN_RE = re.compile(r"\n{3,}")
 
+# Copyright/license boilerplate phrases, taken from real front-matter text
+# observed across this project's own corpus (not guessed) - e.g. "This is an
+# open-access article distributed under the terms of the Creative Commons
+# Attribution License (CC BY)... No use, distribution or reproduction is
+# permitted which does not comply with these terms." A sentence containing
+# any of these is journal/publisher boilerplate, never a scientific claim.
+_BOILERPLATE_PHRASES = (
+    "creative commons",
+    "cc by",
+    "open access article",
+    "open-access article",
+    "no use, distribution or reproduction",
+    "accepted academic practice",
+    "unrestricted use, distribution, and reproduction",
+    "all rights reserved",
+    "provided the original author",
+)
+# Simple sentence-boundary heuristic (period/!/? followed by a capitalized
+# word) - not a full sentence tokenizer. An occasional mis-split only
+# changes how much surrounding text is removed alongside a real match, not
+# whether the check itself is correct.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
+
 
 def strip_soft_hyphens(text: str) -> str:
     """Remove soft hyphens (U+00AD), joining any word they split with nothing
@@ -69,6 +92,28 @@ def unwrap_soft_line_breaks(text: str) -> str:
     return "\n\n".join(joined_blocks)
 
 
+def strip_boilerplate_sentences(text: str) -> str:
+    """Remove sentences matching known copyright/licensing boilerplate
+    phrases - front-matter noise distinct from the references-section
+    problem (already excluded earlier in the pipeline). Real example still
+    visible in retrieval results as of Phase 12/19 testing: "This is an
+    open-access article distributed under the terms of the Creative Commons
+    Attribution License (CC BY)... No use, distribution or reproduction is
+    permitted which does not comply with these terms."
+
+    Deliberately narrow: this catches the copyright/license *sentence*
+    specifically. Author-affiliation lists and editorial-workflow metadata
+    (RECEIVED/REVIEWED/CITATION blocks) are a different, harder problem -
+    they have no equally reliable structural marker (unlike "References",
+    a standalone "Abstract" heading was checked and found present in only
+    5 of 8 real corpus papers, too unreliable a signal to build on) and are
+    NOT addressed by this function. See the README's Limitations section.
+    """
+    sentences = _SENTENCE_SPLIT_RE.split(text)
+    kept = [s for s in sentences if not any(phrase in s.lower() for phrase in _BOILERPLATE_PHRASES)]
+    return " ".join(kept)
+
+
 def collapse_whitespace(text: str) -> str:
     """Normalize runs of spaces/tabs to one space and cap blank-line runs at one."""
     text = _RUN_OF_SPACES_RE.sub(" ", text)
@@ -94,14 +139,16 @@ def _strip_matched_line(text: str, repeated_lines: set[str], *, position: str) -
 
 def clean_page_text(text: str, *, header_lines: set[str], footer_lines: set[str]) -> str:
     """Run the full per-page cleaning pipeline in order: strip confirmed
-    running headers/footers first (they're matched against raw lines),
-    then dehyphenate (needs the original newlines), then unwrap soft line
-    breaks, then collapse residual whitespace."""
+    running headers/footers first (they're matched against raw lines), then
+    dehyphenate (needs the original newlines), then unwrap soft line breaks,
+    then strip copyright/license boilerplate sentences (needs prose-shaped
+    text to split into sentences), then collapse residual whitespace."""
     text = _strip_matched_line(text, header_lines, position="first")
     text = _strip_matched_line(text, footer_lines, position="last")
     text = strip_soft_hyphens(text)
     text = dehyphenate(text)
     text = unwrap_soft_line_breaks(text)
+    text = strip_boilerplate_sentences(text)
     text = collapse_whitespace(text)
     return text
 
