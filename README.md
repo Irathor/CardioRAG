@@ -318,7 +318,18 @@ actually running the system against real data, not anticipated in advance.
   checked as a possible boundary marker (the same rigor applied to "References" in Phase 5-7) and
   found reliably present in only 5 of the 8 real corpus papers, too unreliable a signal to build
   on; this needs layout-aware extraction instead (see Future Work).
-- No minimum chunk-quality filter; a very short or degenerate chunk can still enter the index.
+- **Fixed**: `ChunkingConfig.min_alpha_ratio` (default 0.4) drops chunks below that fraction of
+  alphabetic characters. Calibrated against the real corpus, not guessed: inspecting the worst
+  chunks by this metric showed genuine numeric-table junk (patient-demographics tables,
+  confusion-matrix values, ROC-curve axis labels like "0 0.2 0.4 0.6 0.8 1.0" repeated) at ratios
+  0.03-0.32, while the 5th percentile of all real chunks sits at 0.67 — comfortable separation, no
+  arbitrary cutoff. Token count was checked first as a candidate signal and rejected: the
+  *shortest* real chunks by token count were legitimate prose (a document's trailing paragraph),
+  not degenerate content — length wasn't the right signal, alphabetic density was. Re-ran Phase
+  12's evaluation after rebuilding the index (395 → 390 chunks, 5 dropped): metrics were
+  essentially unchanged to marginally better (Recall@K ticked up slightly) — unlike fix #2, this
+  one had no measured downside, consistent with the dropped chunks genuinely not being useful
+  evidence for any of the 34 evaluation questions.
 
 **Retrieval / generation**
 - ~~The citation checker validates range but not content~~ **Fixed**: `find_fabricated_quotes()`

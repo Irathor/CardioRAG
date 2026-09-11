@@ -9,10 +9,19 @@ chunk boundary. `ChunkingConfig` makes both explicit so Phase 12 can compare
 configurations empirically instead of guessing.
 """
 
+import re
 from dataclasses import dataclass
 
 from cardiorag.chunking.tokenization import get_tokenizer
 from cardiorag.models import Chunk, Document
+
+_LETTER_RE = re.compile(r"[A-Za-z]")
+
+
+def _alpha_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    return len(_LETTER_RE.findall(text)) / len(text)
 
 
 @dataclass(frozen=True)
@@ -26,6 +35,13 @@ class ChunkingConfig:
     chunk_size: int = 256  # tokens
     chunk_overlap: int = 32  # tokens
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    # Chunks with a lower fraction of alphabetic characters than this are
+    # dropped - calibrated against the real corpus (Phase 20 fix #4): chunks
+    # below ~0.4 were confirmed to be numeric tables (patient demographics,
+    # confusion matrices, ROC-curve axis labels), never real prose, while the
+    # 5th percentile of all real chunks sits at 0.67 - a 0.4 cutoff only
+    # catches genuine outliers, not merely list- or number-heavy prose.
+    min_alpha_ratio: float = 0.4
 
     def __post_init__(self) -> None:
         if self.chunk_size <= 0:
@@ -34,6 +50,8 @@ class ChunkingConfig:
             raise ValueError("chunk_overlap must not be negative")
         if self.chunk_overlap >= self.chunk_size:
             raise ValueError("chunk_overlap must be smaller than chunk_size")
+        if not 0.0 <= self.min_alpha_ratio <= 1.0:
+            raise ValueError("min_alpha_ratio must be between 0.0 and 1.0")
 
 
 def _page_text(page) -> str:  # noqa: ANN001 - PageContent, kept loose to avoid a circular import
@@ -109,7 +127,7 @@ def chunk_document(document: Document, config: ChunkingConfig | None = None) -> 
         char_end = offsets[end_token - 1][1]
         chunk_text = full_text[char_start:char_end].strip()
 
-        if chunk_text:
+        if chunk_text and _alpha_ratio(chunk_text) >= config.min_alpha_ratio:
             chunks.append(
                 Chunk(
                     chunk_id=f"{document.document_id}-{index:04d}",

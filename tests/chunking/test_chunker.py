@@ -68,7 +68,10 @@ def test_chunk_document_returns_empty_list_for_blank_document(fake_tokenizer):
 def test_chunk_document_respects_chunk_size_and_produces_overlap(fake_tokenizer):
     words = " ".join(f"w{i}" for i in range(30))  # 30 tokens under the fake tokenizer
     document = _make_document([words])
-    config = ChunkingConfig(chunk_size=10, chunk_overlap=3)
+    # min_alpha_ratio=0.0: this test is about windowing, not quality filtering -
+    # placeholder tokens like "w9" are digit-heavy and would otherwise be
+    # dropped by the real default threshold.
+    config = ChunkingConfig(chunk_size=10, chunk_overlap=3, min_alpha_ratio=0.0)
 
     chunks = chunk_document(document, config)
 
@@ -98,13 +101,52 @@ def test_chunk_document_tracks_pages_spanned_by_each_chunk(fake_tokenizer):
     page1 = " ".join(f"w{i}" for i in range(10))  # tokens 0-9
     page2 = " ".join(f"w{i}" for i in range(10, 20))  # tokens 10-19
     document = _make_document([page1, page2])
-    config = ChunkingConfig(chunk_size=6, chunk_overlap=2)
+    config = ChunkingConfig(chunk_size=6, chunk_overlap=2, min_alpha_ratio=0.0)  # see note above
 
     chunks = chunk_document(document, config)
 
     assert chunks[0].page_numbers == [1]  # fully inside page 1
     assert [1, 2] in [c.page_numbers for c in chunks]  # some chunk spans the boundary
     assert chunks[-1].page_numbers == [2]  # fully inside page 2
+
+
+def test_chunking_config_rejects_invalid_min_alpha_ratio():
+    with pytest.raises(ValueError, match="min_alpha_ratio"):
+        ChunkingConfig(min_alpha_ratio=1.5)
+
+
+def test_chunk_document_drops_low_alpha_ratio_chunks(fake_tokenizer):
+    # Real data pattern found in the corpus (Phase 20 fix #4): a numeric
+    # table window with no real prose content.
+    prose_page = "alpha beta gamma delta epsilon"
+    numeric_table_page = "12 34 56 78 90"
+    document = _make_document([prose_page, numeric_table_page])
+    config = ChunkingConfig(chunk_size=5, chunk_overlap=0, min_alpha_ratio=0.4)
+
+    chunks = chunk_document(document, config)
+
+    assert len(chunks) == 1
+    assert chunks[0].text == prose_page
+
+
+def test_chunk_document_keeps_prose_chunks_that_merely_mention_numbers(fake_tokenizer):
+    # Real prose containing numbers (e.g. "LVEF was 55.3%") must not be
+    # penalized just for having some digits.
+    document = _make_document(["LVEF was measured at fifty five percent in this cohort study"])
+    config = ChunkingConfig(chunk_size=20, chunk_overlap=0, min_alpha_ratio=0.4)
+
+    chunks = chunk_document(document, config)
+
+    assert len(chunks) == 1
+
+
+def test_chunk_document_min_alpha_ratio_zero_keeps_everything(fake_tokenizer):
+    document = _make_document(["12 34 56 78 90"])
+    config = ChunkingConfig(chunk_size=5, chunk_overlap=0, min_alpha_ratio=0.0)
+
+    chunks = chunk_document(document, config)
+
+    assert len(chunks) == 1
 
 
 def test_chunk_document_falls_back_to_raw_text_when_uncleaned(fake_tokenizer):
@@ -132,7 +174,9 @@ def test_chunk_document_skips_pages_marked_as_references(fake_tokenizer):
     metadata = DocumentMetadata(filename="f.pdf", num_pages=2)
     document = Document(document_id="doc3", metadata=metadata, pages=[body_page, references_page])
 
-    chunks = chunk_document(document, ChunkingConfig(chunk_size=10, chunk_overlap=0))
+    chunks = chunk_document(
+        document, ChunkingConfig(chunk_size=10, chunk_overlap=0, min_alpha_ratio=0.0)
+    )
 
     assert len(chunks) == 1
     assert "w4" not in chunks[0].text
