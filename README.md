@@ -4,8 +4,64 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 12 — retrieval evaluation, plus a working second LLM provider (Groq) added
-ahead of Phase 13. `src/cardiorag/evaluation/retrieval_metrics.py`
+**Status:** Phase 13 — generation evaluation, run against the real evaluation dataset (all 38
+questions) through Groq. `src/cardiorag/evaluation/generation_metrics.py` implements faithfulness,
+answer relevance, and context relevance from scratch (LLM-as-judge, inspired by the Ragas paper
+already in this project's own corpus), reusing Phase 10's citation checker and a new
+phrase-based `looks_like_refusal` detector for answerability behavior.
+
+**Results** (`data/evaluation/generation_eval_results.csv`), with an important caveat below:
+
+| metric | all 34 answerable (blended) | 28 with JSON-compliant judge only |
+|---|---:|---:|
+| mean faithfulness | 0.785 | **0.953** |
+| mean answer relevance | - | 0.777 |
+| mean context relevance | - | 0.582 |
+| hallucinated citations | 0 | 0 |
+| refusal correctness (should NOT refuse) | 100% | - |
+| no-evidence refusal correctness (SHOULD refuse, n=4) | 0%* | - |
+
+\* **This number is misleading on its own - see the manual inspection below.**
+
+**The free-tier saga, reported honestly because it's real engineering, not a footnote:** running
+this required cycling through five different Groq models across six attempts in one session.
+`openai/gpt-oss-120b` and `openai/gpt-oss-20b` each hit their own ~200k-tokens/day cap
+mid-run (confirmed: the cap is per-model, not a shared org pool); `groq/compound-mini` looked
+like a fresh option but turned out to be an agentic system that itself routes through
+`gpt-oss-120b`, inheriting its already-exhausted quota; a bare `RateLimitError` retry loop
+(added early, `RetryingProvider`) handles short per-minute limits but is useless against a
+multi-hour daily reset. Two real fixes came out of this, not just model-swapping: (1) faithfulness
+checking originally made one LLM call per extracted statement - rewritten to verify all statements
+in a single batched call (`verify_statements`), which took the run from failing at question 13 to
+question 25 on the same daily budget; (2) `OpenAIProvider` never set `max_tokens` explicitly, so
+one model rejected requests outright for exceeding its default output-token-per-minute ceiling -
+now explicit (`max_tokens=800`). The script also now checkpoints results to CSV after every
+question and resumes by skipping already-scored ids, since two earlier attempts crashed
+mid-run and lost everything (nothing had been persisted until the very end).
+
+**Manual inspection of the 4 no-evidence answers** (required by Phase 13, and it's what actually
+caught the real story here) revealed the 0% refusal number is mostly an artifact of a too-narrow
+keyword list, not a wholesale system failure: two answers (`q032`, `q034`) substantively declined
+to answer ("there is no direct mention of...", "have not been directly compared") using phrasing
+the original `_REFUSAL_PHRASES` list didn't include at all - fixed by adding the real observed
+phrases. But manual reading also found a genuine, more serious problem the automated metrics
+missed entirely: `q033` opens with an appropriate decline, then **fabricates a citation** -
+`[Source 1] states: "Gadolinium-based contrast agents ... dosing should be based on body
+weight."` - a sentence that does not exist in that source (the corpus has no contrast-dosing
+content at all, which is exactly why this question was chosen as unanswerable). Phase 10's
+citation checker did not flag this, because it only validates that a cited source *number* is in
+range - it has no way to check whether the *content* attributed to that source is actually there.
+That gap is now a documented open limitation, not a fixed one.
+
+The blended-vs-reliable faithfulness split above exists because the last 10 questions were
+answered by `allam-2-7b` after every higher-quality model's daily quota ran out - it often
+returned free-form prose instead of the requested JSON for judge prompts, which
+`generation_metrics.py` correctly detects and falls back to a conservative "unsupported" score
+for, rather than silently miscounting. That fallback is honest but drags the blended average down
+for reasons unrelated to real answer quality, which is why both numbers are reported rather than
+just one.
+
+ `src/cardiorag/evaluation/retrieval_metrics.py`
 (Hit Rate, Precision@K, Recall@K, MRR, nDCG) and `evaluator.py` (relevance judged by
 document+page overlap, not exact chunk_id, since chunk boundaries shift across chunk_size
 configs) measure retrieval against the Phase 11 ground truth. `scripts/evaluate_retrieval.py`

@@ -27,8 +27,19 @@ class Settings(BaseSettings):
     # reuses OpenAIProvider with a different base_url - no new provider class
     # needed, just different configuration (proof that Phase 9's abstraction
     # actually works across unrelated backends).
+    #
+    # Every model on the free tier shares the same ~200k-tokens/day ceiling
+    # PER MODEL (not a shared org-wide pool) - confirmed by exhausting it on
+    # four different models in a row during Phase 13's evaluation loop
+    # (openai/gpt-oss-120b, openai/gpt-oss-20b, groq/compound-mini - which
+    # turned out to itself route to gpt-oss-120b under the hood, sharing its
+    # quota - then qwen/qwen3.8-27b). "qwen/qwen3.8-27b" is the default here
+    # because it reliably followed this project's "return ONLY JSON" judge
+    # instructions; "allam-2-7b" is a real fallback with a separate quota,
+    # but often answered in free-form prose instead of the requested JSON,
+    # which silently degrades the LLM-as-judge metrics in generation_metrics.py.
     groq_api_key: str | None = None
-    groq_model: str = "openai/gpt-oss-120b"
+    groq_model: str = "qwen/qwen3.8-27b"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3"
 

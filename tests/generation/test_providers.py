@@ -1,8 +1,52 @@
 from types import SimpleNamespace
 
+import httpx
 import pytest
+from openai import RateLimitError
 
-from cardiorag.generation.providers import OpenAIProvider, load_provider_from_settings
+from cardiorag.generation.providers import OpenAIProvider, RetryingProvider, load_provider_from_settings
+
+
+def _rate_limit_error() -> RateLimitError:
+    response = httpx.Response(status_code=429, request=httpx.Request("POST", "http://test"))
+    return RateLimitError("rate limited", response=response, body=None)
+
+
+class _FlakyProvider:
+    """Raises RateLimitError a fixed number of times, then succeeds."""
+
+    def __init__(self, fail_times: int, response: str = "ok"):
+        self._fail_times = fail_times
+        self._response = response
+        self.call_count = 0
+
+    def generate(self, system_prompt: str, user_prompt: str) -> str:
+        self.call_count += 1
+        if self.call_count <= self._fail_times:
+            raise _rate_limit_error()
+        return self._response
+
+
+def test_retrying_provider_retries_and_eventually_succeeds(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    flaky = _FlakyProvider(fail_times=2)
+    provider = RetryingProvider(flaky, max_retries=5, base_delay_seconds=0.01)
+
+    result = provider.generate("sys", "user")
+
+    assert result == "ok"
+    assert flaky.call_count == 3
+
+
+def test_retrying_provider_raises_after_exhausting_retries(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    flaky = _FlakyProvider(fail_times=10)
+    provider = RetryingProvider(flaky, max_retries=2, base_delay_seconds=0.01)
+
+    with pytest.raises(RateLimitError):
+        provider.generate("sys", "user")
+
+    assert flaky.call_count == 3  # initial attempt + 2 retries
 
 
 def test_openai_provider_sends_correct_messages_and_returns_content(monkeypatch):
@@ -29,6 +73,7 @@ def test_openai_provider_sends_correct_messages_and_returns_content(monkeypatch)
     call = captured_calls[0]
     assert call["model"] == "gpt-4o-mini"
     assert call["temperature"] == 0.0
+    assert call["max_tokens"] == 800
     assert call["messages"] == [
         {"role": "system", "content": "system prompt"},
         {"role": "user", "content": "user prompt"},
