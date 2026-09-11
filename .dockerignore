@@ -1,0 +1,21 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.pytest_cache/
+.ruff_cache/
+.claude/
+
+# Raw corpus, generated embeddings, and the FAISS index are large and/or
+# regenerated - the real ones are supplied via a volume mount at runtime,
+# not baked into the image.
+data/corpus/*
+!data/corpus/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+indexes/*
+!indexes/.gitkeep
+
+.env
+*.egg-info/

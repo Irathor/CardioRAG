@@ -1,0 +1,42 @@
+services:
+  api:
+    build: .
+    ports:
+      # Host port is overridable ($API_HOST_PORT) so it never collides with
+      # something else already bound to 8000 on the host - the container's
+      # own port stays fixed at 8000 regardless.
+      - "${API_HOST_PORT:-8000}:8000"
+    env_file:
+      - .env
+    volumes:
+      # The real corpus/embeddings/index live on the host (never baked into
+      # the image - they're gitignored, regenerated artifacts and, for the
+      # corpus, potentially copyrighted PDFs). Build them first with
+      # scripts/embed_corpus.py + scripts/build_index.py, or run those
+      # inside the container - see the README.
+      - ./data:/app/data
+      - ./indexes:/app/indexes
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  ui:
+    build: .
+    command:
+      [
+        "streamlit", "run", "app/streamlit_app.py",
+        "--server.address=0.0.0.0", "--server.port=8501",
+      ]
+    ports:
+      - "${UI_HOST_PORT:-8501}:8501"
+    environment:
+      # Container-to-container DNS on the Compose network: "api" resolves
+      # to the api service, not localhost - this is NOT the same value as
+      # API_HOST_PORT above, which only matters for host-to-container access.
+      - API_BASE_URL=http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy

@@ -4,7 +4,11 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 18 — integration testing. `tests/integration/` chains real modules across phase
+**Status:** Phase 19 — Docker. See the **Docker** section below for build/config/index-creation/
+startup, all actually run against a real build (not just written and assumed to work) - the
+containerized API served a real `/query` call to Groq and returned a grounded, sourced answer.
+
+Underneath, Phase 18 — integration testing. `tests/integration/` chains real modules across phase
 boundaries against a small synthetic two-document corpus (built fresh per test, not
 `data/corpus/`): PDF -> chunks (Phases 1-3 + the references-exclusion fix), chunks -> vector
 index (Phases 4-5, real embedding model), query -> ranked retrieval (Phase 6), and the full
@@ -295,6 +299,60 @@ pytest
 Additional dependency groups (`ingestion`, `ml`, `api`, `ui`, `eval`) are installed
 incrementally as each corresponding phase is implemented — there's no reason to pull in
 PyTorch/FAISS before we're embedding anything.
+
+## Docker
+
+One image serves both the API and the UI (different `command:` per service in
+`docker-compose.yml`) rather than two separate Dockerfiles — simpler to build and maintain at
+this project's size, at the cost of the UI image also carrying the ML stack it doesn't use at
+runtime (the UI is a pure HTTP client of the API). All commands below were actually run against
+a real build, not just written and assumed to work.
+
+**Build:**
+```bash
+docker compose build
+```
+
+**Configuration:** the API container reads `.env` (via `env_file` in `docker-compose.yml`) —
+create it from `.env.example` first, same as local development. The UI container needs no `.env`:
+`API_BASE_URL` is set to `http://api:8000` directly in `docker-compose.yml`, using Compose's
+container-to-container DNS (the service name `api` resolves on the Compose network) — this is a
+different value from what a *host* browser would use, and is set automatically, not something you
+configure.
+
+**Index creation:** the real corpus PDFs and the built embeddings/FAISS index are never baked
+into the image (`data/corpus`, `data/processed`, `indexes/` are gitignored, regenerated
+artifacts — the corpus may also be copyrighted). They're bind-mounted from the host instead:
+```bash
+docker compose run --rm api python scripts/embed_corpus.py
+docker compose run --rm api python scripts/build_index.py
+```
+Or build them locally first (`python scripts/embed_corpus.py && python scripts/build_index.py`)
+and just let the volume mount expose the existing `data/`/`indexes/` to the containers — either
+way works since both read/write the same host-mounted directories.
+
+**Startup:**
+```bash
+docker compose up -d
+```
+`api` on `:8000`, `ui` on `:8501` by default — override with `API_HOST_PORT`/`UI_HOST_PORT` env
+vars if those host ports are already taken (they were on the machine this was tested on, since
+other unrelated projects were already running). The `ui` service waits for `api`'s healthcheck
+to pass (`depends_on: condition: service_healthy`) before starting, so it never races a
+not-yet-ready API.
+
+**Testing (done for real, not just described):** built the image, started both services with
+`API_HOST_PORT=8090 UI_HOST_PORT=8591 docker compose up -d`, and verified:
+- `GET /health` → `{"status":"ok","index_loaded":true,"num_chunks":395,"llm_provider_configured":true}`
+  (395 matches the real host-mounted index exactly)
+- `POST /retrieve` and `POST /query` both returned real, correctly-sourced results — `/query`
+  made a real outbound call to Groq from inside the container and got a grounded answer back
+- the UI's root page returned HTTP 200
+- `docker exec medirag-ui-1 curl http://api:8000/health` succeeded - confirmed
+  container-to-container networking actually works via Compose's DNS, not just that both
+  services happen to also be independently reachable from the host
+
+Torn down afterward with `docker compose down`; nothing was left running.
 
 ## Roadmap
 
