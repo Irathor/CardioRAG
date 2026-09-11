@@ -7,6 +7,8 @@ from cardiorag.ingestion.pdf_loader import load_corpus
 from cardiorag.models import EvaluationCategory
 
 DATASET_PATH = Path("data/evaluation/eval_dataset.jsonl")
+CORPUS_DIR = Path("data/corpus")
+_HAS_REAL_CORPUS = any(CORPUS_DIR.glob("*.pdf"))
 
 
 @pytest.fixture(scope="module")
@@ -52,10 +54,18 @@ def test_expected_pages_are_positive(dataset):
             assert page > 0, f"{example.id} has a non-positive expected page {page}"
 
 
+@pytest.mark.skipif(
+    not _HAS_REAL_CORPUS,
+    reason=(
+        "requires the real corpus PDFs in data/corpus/, which are gitignored (potentially "
+        "copyrighted) and therefore absent from a fresh checkout, e.g. CI - run locally with "
+        "the real corpus present to exercise this check."
+    ),
+)
 def test_expected_document_ids_match_the_real_corpus(dataset):
     """Guards against a stale/typo'd document_id in the hand-authored dataset:
     every id it references must actually exist in the current corpus."""
-    result = load_corpus(Path("data/corpus"))
+    result = load_corpus(CORPUS_DIR)
     real_document_ids = {doc.document_id for doc in result.documents}
 
     for example in dataset:

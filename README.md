@@ -240,9 +240,14 @@ every push/PR to `master`, on a fresh `ubuntu-latest` runner with every extra in
 API keys needed, since every provider-dependent test uses a fake/mock provider rather than a real
 network call (see `tests/generation/test_providers.py`); the embedder/reranker fixtures do
 download two small public models from the Hugging Face Hub, cached across runs via
-`actions/cache`. Written and verified by running the identical commands locally (all 268 tests and
-a clean lint pass on this exact codebase) — not verified running on GitHub Actions itself, since
-this repository has no configured git remote to push to yet.
+`actions/cache`. **Verified against a real run, not just written and assumed to work**: the first
+actual push to GitHub Actions failed — `test_expected_document_ids_match_the_real_corpus`
+(`tests/evaluation/test_dataset.py`) loads the real PDFs in `data/corpus/` to cross-check the
+hand-authored evaluation dataset, but those PDFs are gitignored (potentially copyrighted) and
+therefore don't exist on a fresh CI checkout, so it failed with an empty corpus instead of a real
+inconsistency. Fixed with an explicit `pytest.mark.skipif` (not by deleting or weakening the
+check) — confirmed locally both ways: it runs and passes with the real corpus present, and skips
+cleanly (rather than failing) with the corpus PDFs temporarily removed, simulating CI exactly.
 
 Build the index once before running the API/UI/scripts against real data:
 ```bash
