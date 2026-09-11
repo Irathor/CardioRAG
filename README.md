@@ -283,13 +283,19 @@ Documented as found, not smoothed over — most were caught by this project's ow
 actually running the system against real data, not anticipated in advance.
 
 **Ingestion / metadata**
-- Title extraction takes the first substantial line of page 1; a multi-line title gets truncated
-  (observed on a real paper in the corpus).
-- Publication year extraction takes the first 4-digit number found; can match a citation year
-  instead of the publication year.
-- Author extraction relies on embedded PDF metadata only, which is often incomplete.
-- *(Fix direction: query CrossRef/Semantic Scholar by the DOI, which extracts reliably, instead
-  of trusting embedded PDF metadata.)*
+- **Fixed, when a DOI was extracted**: `ingestion/crossref.py` queries the free CrossRef API for
+  a paper's DOI and returns authoritative title/author/year data, as a separate, explicit
+  enrichment step (never baked into `load_pdf()`, so core ingestion stays offline and
+  deterministic — most of this project's ingestion tests depend on that). Run for real against
+  all 8 corpus papers (`scripts/enrich_metadata.py`): 5 of 8 gained substantially more complete
+  author lists (e.g. 1 author → 10, 0 → 3, 1 → 28), and one had its publication year corrected by
+  5 years (2020 → 2025, PDF heuristic vs. CrossRef's actual record).
+- **Still open**: CrossRef enrichment only helps when a DOI exists to look up. 2 of 8 papers
+  (both arXiv preprints) have no DOI embedded in their PDF text at all — not an extraction bug,
+  those papers genuinely don't have one — so their title-truncation/wrong-year issues remain
+  exactly as before. One paper's "DOI" (`10.1162/tacl`) turned out to be a truncated journal-name
+  fragment rather than a real DOI, confirmed by CrossRef returning 404 — a real extraction-quality
+  signal this fix surfaced as a side effect, not something it fixes on its own.
 
 **Cleaning / chunking**
 - `unwrap_soft_line_breaks` treats a blank line as the only paragraph boundary; a list or table

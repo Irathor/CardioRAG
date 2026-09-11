@@ -20,9 +20,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Phase 1: PDF ingestion
+# Phase 1: PDF ingestion. httpx is for the optional CrossRef metadata
+# enrichment (ingestion/crossref.py) - never required by core PDF extraction.
 ingestion = [
     "pymupdf>=1.24",
+    "httpx>=0.27",
 ]
 # Phase 3: chunking needs the embedding model's real tokenizer for accurate
 # token counts, but not the model weights themselves — transformers alone
