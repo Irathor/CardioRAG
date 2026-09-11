@@ -35,25 +35,18 @@ services:
     ports:
       - "${REDIS_HOST_PORT:-6379}:6379"
 
-  ui:
-    build: .
-    command:
-      [
-        "streamlit", "run", "app/streamlit_app.py",
-        "--server.address=0.0.0.0", "--server.port=8501",
-      ]
+  web:
+    build:
+      context: ./web
+      args:
+        # Baked into the static bundle at BUILD time (Vite), unlike the api
+        # service's env vars, which are read at runtime - this must be a URL
+        # the BROWSER can reach (the host), not "http://api:8000" (Docker-
+        # internal DNS, unreachable from outside the Compose network).
+        VITE_API_BASE_URL: http://localhost:${API_HOST_PORT:-8000}
+        VITE_API_KEY: ${API_KEY:-}
     ports:
-      - "${UI_HOST_PORT:-8501}:8501"
-    environment:
-      # Container-to-container DNS on the Compose network: "api" resolves
-      # to the api service, not localhost - this is NOT the same value as
-      # API_HOST_PORT above, which only matters for host-to-container access.
-      - API_BASE_URL=http://api:8000
-      # Same secret the api service reads from .env (Phase 20 fix #6) - the
-      # ui service has no env_file of its own, so this must be forwarded
-      # explicitly or the UI's requests would be rejected with 401 whenever
-      # API_KEY is set. Empty when unset, matching auth-disabled.
-      - API_KEY=${API_KEY:-}
+      - "${WEB_HOST_PORT:-8501}:80"
     depends_on:
       api:
         condition: service_healthy

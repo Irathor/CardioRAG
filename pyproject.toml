@@ -54,11 +54,6 @@ api = [
     "uvicorn[standard]>=0.30",
     "redis>=5.0",
 ]
-# Phase 16: UI
-ui = [
-    "streamlit>=1.36",
-    "httpx>=0.27",
-]
 # Phase 12-13: evaluation
 eval = [
     "pandas>=2.2",

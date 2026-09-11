@@ -46,16 +46,18 @@ flowchart TD
 
     subgraph Serving
         API[FastAPI backend]
-        UI[Streamlit UI]
-        UI -->|HTTP| API
+        WEB[React + shadcn/ui web client]
+        WEB -->|HTTP + SSE| API
     end
     API --> QE
     API --> LLM
     ANS --> API
 ```
 
-The API and UI are separate processes/containers communicating over HTTP (Phases 15-16, 19) —
-the UI never touches the embedding model, index, or LLM directly.
+The API and web client are separate processes/containers communicating over HTTP and Server-Sent
+Events (Phases 15-16, 19; client rebuilt post-Phase 20 as a React SPA) — the client never touches
+the embedding model, index, or LLM directly, and holds no logic beyond rendering what the API
+returns.
 
 ## RAG Pipeline
 
@@ -261,21 +263,32 @@ python scripts/build_index.py    # builds the FAISS index into indexes/
 docker compose build
 docker compose run --rm api python scripts/embed_corpus.py   # if indexes/ is empty
 docker compose run --rm api python scripts/build_index.py
-docker compose up -d              # api on :8000, ui on :8501
+docker compose up -d              # api on :8000, web on :8501
 docker compose --profile redis up -d   # optional: also starts redis, for RATE_LIMIT_BACKEND=redis
 ```
-Override host ports with `API_HOST_PORT`/`UI_HOST_PORT` if those are already taken. See the
+Override host ports with `API_HOST_PORT`/`WEB_HOST_PORT` if those are already taken. See the
 Docker section that follows for what was actually verified against a real build.
 
 **Docker details, verified against a real build (not just written and assumed to work):**
 `data/corpus`, `data/processed`, and `indexes/` are bind-mounted from the host rather than baked
 into the image (they're gitignored, regenerated artifacts, and the corpus may be copyrighted).
-Built the image, ran `API_HOST_PORT=8090 UI_HOST_PORT=8591 docker compose up -d`, and confirmed:
-`GET /health` reported `num_chunks: 395` matching the host-mounted index exactly; `POST /query`
-made a real outbound call to Groq from inside the container and returned a grounded, sourced
-answer; the UI served HTTP 200; and `docker exec ui curl http://api:8000/health` succeeded,
-confirming container-to-container DNS actually works via Compose's network, not just that both
-services happen to be independently reachable from the host.
+Built both images and ran `API_HOST_PORT=8190 WEB_HOST_PORT=8591 docker compose up -d`, then
+drove the running stack with a real headless browser (Playwright): `GET /health` reported
+`num_chunks: 390` matching the host-mounted index; clicking a real example question in the web
+client made a real `/query/stream` call to the containerized API, streamed a real Groq-generated
+answer in 2.1s, and rendered 5 real sources with correct titles/DOIs — the full pipeline, through
+the actual built containers, not a mock.
+
+One real build-time gotcha this caught: Vite bakes `VITE_API_BASE_URL` into the static bundle at
+**build** time, not container start. Running `docker compose build` once and then `docker compose
+up` with a *different* `API_HOST_PORT` produces a web image whose bundle still points at the old
+port — silently, with no error, just a browser that can never reach the API. `web/Dockerfile` and
+the `web` service in `docker-compose.yml` both carry a comment about this now; changing
+`API_HOST_PORT` requires rebuilding the `web` image (`docker compose build web`), not just
+restarting the stack. (Container-to-container DNS, exercised by the old Streamlit UI's
+server-side HTTP calls, is no longer relevant to this client: it's a static SPA the *browser*
+loads, so it always talks to the API's host-facing port, never the Compose-internal `api`
+hostname.)
 
 ## Usage
 
@@ -292,9 +305,12 @@ curl -X POST http://localhost:8000/query \
   -d '{"question": "How does AI improve cardiac MRI segmentation?", "top_k": 5}'
 ```
 
-**Streamlit UI:**
+**Web client** (React + [shadcn/ui](https://ui.shadcn.com), see `web/README.md`):
 ```bash
-streamlit run app/streamlit_app.py   # requires the API running separately, see above
+cd web
+npm install
+cp .env.example .env.local   # VITE_API_BASE_URL, defaults to http://localhost:8000
+npm run dev                  # requires the API running separately, see above
 ```
 
 **Experiments** (chunking/embedding/retrieval/generation comparisons, all reproducible):
@@ -493,9 +509,15 @@ actually running the system against real data, not anticipated in advance.
   cut off at the 4th request *combined* regardless of which process served it — while the same
   alternating pattern against two independent in-memory `RateLimiter` instances let all 5 through,
   reproducing the exact "effective limit multiplies by replica count" problem this fixes.
-- No CI/CD pipeline configured.
-- The Streamlit UI was verified to boot cleanly (server health checks, no tracebacks) but not
-  interactively click-tested in a real browser — this environment has no browser automation tool.
+- **Fixed**: `.github/workflows/ci.yml` runs `ruff check .` + `pytest -q` on every push/PR — see
+  the CI note under Installation for what was actually verified (including a real first-run
+  failure it caught and the fix for it).
+- **Fixed**: the web client (`web/`, React + shadcn/ui, replacing the earlier Streamlit UI) was
+  interactively tested end-to-end in a real headless browser via Playwright — a real health check,
+  a real streamed query against the real Groq-backed API with sources rendering as they arrive,
+  and the documents tab — not just built and assumed to work. Caught and fixed a real bug this
+  way: the API had no CORS headers, so no browser-based client could read a response from a
+  different origin at all until `CORSMiddleware` was added.
 
 ## Future Work
 
@@ -514,14 +536,14 @@ actually running the system against real data, not anticipated in advance.
   SPECTER's off-the-shelf underperformance is measured rather than assumed away.
 - Figure/table extraction — currently text-only; a meaningful fraction of a CMR paper's evidence
   is in its figures.
-- Wire the Streamlit UI up to `/query/stream` instead of blocking `/query` — the endpoint exists
-  and is tested, but the UI doesn't consume it yet, so the slow local-provider path (Fix #7) still
-  shows nothing until the full answer is ready in the UI specifically.
 - Cancel in-flight generation server-side when an SSE client disconnects mid-stream — right now
   the local provider's background generation thread runs to completion regardless, wasting CPU on
   an answer nobody will read.
 - SSE reconnection/resume support — a dropped connection mid-stream currently means starting the
   whole question over, with no way to pick up from the last received token.
+- Permanent Playwright e2e tests for the web client. It was tested end-to-end in a real browser
+  (see Limitations) as one-off verification during development, not committed as a repeatable
+  suite or wired into CI - `web/` has no test command of its own yet.
 
 ## License
 
