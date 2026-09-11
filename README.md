@@ -379,7 +379,28 @@ actually running the system against real data, not anticipated in advance.
   blocks) are a separate, harder problem this does NOT fix — a standalone "Abstract" heading was
   checked as a possible boundary marker (the same rigor applied to "References" in Phase 5-7) and
   found reliably present in only 5 of the 8 real corpus papers, too unreliable a signal to build
-  on; this needs layout-aware extraction instead (see Future Work).
+  on.
+- **Retried with layout, still negative**: revisited the "Abstract" boundary using PyMuPDF's
+  per-span font metadata instead of text matching, to see if the 3 papers missing a literal
+  heading could be found by styling instead. Two real, different sub-findings, neither shippable.
+  First, one of the 3 "misses" turned out to be a text-normalization bug, not a layout problem at
+  all: that paper's heading *is* the literal word, just letter-spaced by the PDF's font
+  (`'A B S T R A C T'`) — a cheap, unrelated fix (stripping internal whitespace before comparing)
+  would recover it, independent of any layout signal. Second, for the other 2 papers — which have
+  no "Abstract" label at all, just an unlabeled first paragraph — tested whether "the first text
+  matching the document's dominant (font, size) style" reliably marks where that paragraph ends.
+  It does, for those 2 papers specifically (one distinguished by font size, the other by font
+  family — not the same signal, already a bad sign for generalizing). But run against all 8 real
+  papers, it produced a false-positive match *inside the title/author-affiliation block* — far
+  too early — on 3 of the other papers, and no match at all on a 5th (net: 4/8 correct, worse than
+  the plain-text heading match's 5/8, and the failures are worse in kind, mis-tagging author names
+  and affiliations as "abstract" rather than just missing a boundary). Not shipped: a heuristic
+  that gets the *type* of error wrong that often isn't a net improvement, and 8 papers is too small
+  a sample to safely add papers-9-through-∞-specific tuning on top without just overfitting further
+  to this corpus. Real layout-aware extraction (this project's original guess at a fix) would mean
+  reading the PDF's actual text-block geometry/reading order, not just the styling of the text
+  content — meaningfully more work than either attempt here, and still unproven, so left as-is
+  rather than half-built. See Future Work.
 - **Fixed**: `ChunkingConfig.min_alpha_ratio` (default 0.4) drops chunks below that fraction of
   alphabetic characters. Calibrated against the real corpus, not guessed: inspecting the worst
   chunks by this metric showed genuine numeric-table junk (patient-demographics tables,
@@ -466,6 +487,13 @@ actually running the system against real data, not anticipated in advance.
 - Query expansion / decomposition for multi-part questions.
 - Section-type metadata tagged at ingestion (body / references / boilerplate / abstract) so
   retrieval can filter by section, rather than relying solely on the references-heading heuristic.
+  Two approaches tried and rejected so far (text-heading matching, then font-styling matching —
+  see Limitations); real layout/reading-order-aware PDF parsing is the next thing to try, not yet
+  attempted.
+- The cheap, unrelated fix found during the layout retry above: normalize internal whitespace
+  before comparing a candidate heading line (recovers a letter-spaced `"A B S T R A C T"` as a
+  real "Abstract" match) — small, safe, never attempted because it surfaced mid-investigation of
+  something else, not because it's risky.
 - A larger corpus, to reduce sampling variance in the evaluation metrics.
 - Domain-fine-tuned embeddings (contrastive fine-tuning on cardiovascular QA pairs), now that
   SPECTER's off-the-shelf underperformance is measured rather than assumed away.
