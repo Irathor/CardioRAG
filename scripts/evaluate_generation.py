@@ -45,8 +45,8 @@ from cardiorag.generation.citations import find_invalid_citations
 from cardiorag.generation.context_builder import build_context
 from cardiorag.generation.generator import generate_answer
 from cardiorag.generation.providers import RetryingProvider, load_provider_from_settings
+from cardiorag.retrieval.hybrid_retriever import load_hybrid_retriever
 from cardiorag.retrieval.reranker import Reranker, retrieve_and_rerank
-from cardiorag.retrieval.retriever import load_retriever
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -120,7 +120,11 @@ def main() -> None:
     examples = load_evaluation_dataset(Path("data/evaluation/eval_dataset.jsonl"))
     provider = RetryingProvider(load_provider_from_settings(settings))
     embedder = Embedder(settings.embedding_model, device="cpu")
-    retriever = load_retriever(Path(settings.index_dir), settings.embedding_model, device="cpu")
+    # Hybrid (dense + BM25), matching what /query and scripts/ask.py actually
+    # serve since Fix #5 - measuring generation quality against a retriever
+    # nobody deploys would report faithfulness/relevance for a pipeline that
+    # isn't the real one.
+    retriever = load_hybrid_retriever(Path(settings.index_dir), settings.embedding_model, device="cpu")
     reranker = Reranker(settings.reranker_model, device="cpu")
 
     existing_df, completed_ids = _load_completed_ids()

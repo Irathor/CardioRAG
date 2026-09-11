@@ -25,6 +25,25 @@ logger = logging.getLogger(__name__)
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 
+def _rate_limit_error_type() -> type[Exception]:
+    """`openai.RateLimitError` if the `openai` package is installed, or a
+    placeholder nothing ever raises otherwise. RetryingProvider wraps every
+    configured provider unconditionally (see api/dependencies.py), including
+    HuggingFaceLocalProvider (Fix #7), which never raises this and doesn't
+    need `openai` installed at all - without this fallback, RetryingProvider
+    would crash on import in a local-only deployment."""
+    try:
+        from openai import RateLimitError
+
+        return RateLimitError
+    except ImportError:
+
+        class _NeverRaised(Exception):
+            pass
+
+        return _NeverRaised
+
+
 class LLMProvider(Protocol):
     def generate(self, system_prompt: str, user_prompt: str) -> str: ...
 
@@ -64,14 +83,18 @@ class OpenAIProvider:
         # we were anywhere near actually needing).
         self.max_tokens = max_tokens
 
+    @staticmethod
+    def _messages(system_prompt: str, user_prompt: str) -> list[dict[str, str]]:
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         response = self._client.chat.completions.create(
             model=self.model,
             max_tokens=self.max_tokens,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=self._messages(system_prompt, user_prompt),
             # 0.0 minimizes creative variance: for grounded scientific
             # answering we want reproducible, evidence-bound output, not
             # creative rephrasing.
@@ -83,10 +106,7 @@ class OpenAIProvider:
         response = self._client.chat.completions.create(
             model=self.model,
             max_tokens=self.max_tokens,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=self._messages(system_prompt, user_prompt),
             temperature=0.0,
             stream=True,
         )
@@ -199,17 +219,7 @@ class RetryingProvider:
         self._base_delay_seconds = base_delay_seconds
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
-        try:
-            from openai import RateLimitError
-        except ImportError:
-            # RetryingProvider wraps whatever provider load_provider_from_settings
-            # built, including HuggingFaceLocalProvider (Phase 20 fix #7), which
-            # never raises this and doesn't need the `openai` package installed
-            # at all. Falling back to a placeholder that nothing ever raises
-            # keeps the except clause below harmless instead of crashing every
-            # generate() call in a local-only deployment.
-            class RateLimitError(Exception):
-                pass
+        RateLimitError = _rate_limit_error_type()
 
         for attempt in range(self._max_retries + 1):
             try:
@@ -228,12 +238,7 @@ class RetryingProvider:
         raise RuntimeError("unreachable")  # loop always returns or raises
 
     def stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
-        try:
-            from openai import RateLimitError
-        except ImportError:
-
-            class RateLimitError(Exception):
-                pass
+        RateLimitError = _rate_limit_error_type()
 
         for attempt in range(self._max_retries + 1):
             iterator = self._wrapped.stream(system_prompt, user_prompt)

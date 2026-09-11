@@ -33,22 +33,30 @@ class GroundedAnswer:
     generation_seconds: float
 
 
+def _build_user_prompt(question: str, retrieved_chunks: list[RetrievedChunk]) -> str | None:
+    """The prompt to send the LLM, or None if there's no evidence to ground
+    an answer in - shared by generate_answer() and stream_answer() so the
+    refusal-before-calling-the-LLM logic exists in exactly one place."""
+    if not retrieved_chunks:
+        logger.info("No chunks retrieved for question - refusing without calling the LLM")
+        return None
+    context = build_context(retrieved_chunks)
+    return build_user_prompt(question, context)
+
+
 def generate_answer(
     provider: LLMProvider,
     question: str,
     retrieved_chunks: list[RetrievedChunk],
 ) -> GroundedAnswer:
-    if not retrieved_chunks:
-        logger.info("No chunks retrieved for question - refusing without calling the LLM")
+    user_prompt = _build_user_prompt(question, retrieved_chunks)
+    if user_prompt is None:
         return GroundedAnswer(
             question=question,
             answer=INSUFFICIENT_EVIDENCE_MESSAGE,
             sources=[],
             generation_seconds=0.0,
         )
-
-    context = build_context(retrieved_chunks)
-    user_prompt = build_user_prompt(question, context)
 
     start = time.perf_counter()
     answer_text = provider.generate(SYSTEM_PROMPT, user_prompt)
@@ -76,11 +84,8 @@ def stream_answer(
     API endpoint (project improvement round). The no-evidence refusal still
     short-circuits before any LLM call, yielded as a single piece so a
     caller consuming either function's output sees text either way."""
-    if not retrieved_chunks:
-        logger.info("No chunks retrieved for question - refusing without calling the LLM")
+    user_prompt = _build_user_prompt(question, retrieved_chunks)
+    if user_prompt is None:
         yield INSUFFICIENT_EVIDENCE_MESSAGE
         return
-
-    context = build_context(retrieved_chunks)
-    user_prompt = build_user_prompt(question, context)
     yield from provider.stream(SYSTEM_PROMPT, user_prompt)

@@ -25,19 +25,10 @@ env/
 # data/evaluation is exempt: it's a small, hand-authored dataset worth versioning.
 data/corpus/*
 !data/corpus/.gitkeep
-data/references/*
-!data/references/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
 indexes/*
 !indexes/.gitkeep
-
-# Notebooks checkpoints
-.ipynb_checkpoints/
-
-# Experiment outputs
-notebooks/experiments/*
-!notebooks/experiments/.gitkeep
 
 # OS / editor
 .DS_Store

@@ -197,6 +197,14 @@ MiniLM, top_k=5, no reranking. See `scripts/evaluate_retrieval.py` and `data/eva
 
 **Generation (Phase 13, real LLM calls via Groq):**
 
+*Cleanup note: these numbers were measured against dense-only retrieval, before Fix #5 introduced
+hybrid retrieval as the default. `scripts/evaluate_generation.py` has since been updated to use
+`load_hybrid_retriever` (matching what `/query` and `scripts/ask.py` actually serve), but the table
+below has not been re-measured against it - that requires a full re-run (real LLM calls across all
+38 questions), not just a code change, and hasn't been done. Retrieval quality is measurably better
+under hybrid (see the table above), so these generation numbers are a plausible floor, not
+necessarily current.*
+
 | Metric | Value | n |
 |---|---:|---:|
 | Faithfulness (JSON-compliant judge subset) | 0.953 | 28 |
