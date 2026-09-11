@@ -3,6 +3,7 @@ import { HeartPulse } from 'lucide-react'
 import { DocumentsPanel } from '@/components/app/DocumentsPanel'
 import { HealthBadge } from '@/components/app/HealthBadge'
 import { QueryPanel } from '@/components/app/QueryPanel'
+import { ThemeToggle } from '@/components/app/ThemeToggle'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Toaster } from '@/components/ui/sonner'
@@ -13,7 +14,7 @@ function App() {
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-4xl items-center justify-between gap-4 px-4 py-4">
           <div className="flex items-center gap-2">
-            <HeartPulse className="size-5 text-primary" />
+            <HeartPulse className="size-5 text-red-500 dark:text-red-400" />
             <div>
               <h1 className="text-base font-semibold leading-none">CardioRAG</h1>
               <p className="text-xs text-muted-foreground">
@@ -21,12 +22,15 @@ function App() {
               </p>
             </div>
           </div>
-          <HealthBadge />
+          <div className="flex items-center gap-3">
+            <HealthBadge />
+            <ThemeToggle />
+          </div>
         </div>
       </header>
 
       <main className="mx-auto flex max-w-4xl flex-col gap-6 px-4 py-6">
-        <Alert>
+        <Alert variant="warning">
           <AlertTitle>Research and educational tool</AlertTitle>
           <AlertDescription>
             Not a medical diagnostic system. Answers are grounded in a small, fixed corpus of

@@ -7,7 +7,8 @@ checking) lives in the API, not here.
 
 Replaces the earlier Streamlit UI (`app/streamlit_app.py`, removed) - same feature set (ask a
 question, see a streamed grounded answer with sources and citation warnings, browse indexed
-documents), a different rendering stack.
+documents), a different rendering stack. Light/dark theme toggle (top right), persisted in
+`localStorage` via `next-themes`.
 
 ## Develop
 
@@ -35,3 +36,7 @@ npm run build   # outputs static files to dist/
 - `VITE_API_KEY`, if set, is sent as `X-API-Key` on every request. It is **not** actually secret
   once built into a client bundle - visible to anyone who opens the page - fine for this project's
   small-trusted-deployment threat model, not a substitute for real per-user auth.
+- `components/ui/alert.tsx` adds a third `warning` variant (amber text, same neutral card
+  background as `default`/`destructive`) beyond shadcn's stock two - used for the standing
+  "research tool, not medical advice" disclaimer, which needed to read as a notice without the
+  alarm of `destructive`.
