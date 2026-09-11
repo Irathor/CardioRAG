@@ -17,6 +17,7 @@ from fastapi import Depends, HTTPException, Request
 
 from cardiorag.api.rate_limit import RateLimiter
 from cardiorag.config import settings
+from cardiorag.embeddings.caching_embedder import CachingEmbedder
 from cardiorag.embeddings.embedder import Embedder
 from cardiorag.generation.providers import (
     LLMProvider,
@@ -35,8 +36,17 @@ def get_vector_store() -> VectorStore:
 
 
 @lru_cache(maxsize=1)
-def get_embedder() -> Embedder:
-    return Embedder(settings.embedding_model, device=settings.embedding_device)
+def get_embedder() -> Embedder | CachingEmbedder:
+    """Wrapped in a query-embedding cache (project improvement round) when
+    settings.query_embedding_cache_size > 0 - the API process is the one
+    place a query genuinely repeats (the same or a similar question from
+    different users/UI sessions hitting the same long-lived process), unlike
+    a one-off script or a test run that starts with an empty cache anyway.
+    """
+    embedder = Embedder(settings.embedding_model, device=settings.embedding_device)
+    if settings.query_embedding_cache_size > 0:
+        return CachingEmbedder(embedder, maxsize=settings.query_embedding_cache_size)
+    return embedder
 
 
 @lru_cache(maxsize=1)

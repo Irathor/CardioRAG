@@ -137,6 +137,15 @@ ranked moderately in *both* lists collectively outscored it. `k=10` fixed it, ve
 that exact real query. Lesson applied consistently with the rest of this project: a "standard"
 default is a starting point to measure at your own scale, not a value to trust unchecked.
 
+**Query-embedding cache — process-local LRU, not a distributed cache.** `CachingEmbedder`
+(`embeddings/caching_embedder.py`) wraps the API's embedder and caches by normalized query text,
+only for single-text calls — the exact shape `Retriever.retrieve()` always uses, never the batch
+shape chunk/ingestion embedding uses, so it adds nothing on that path. The real payoff is a
+long-lived API process seeing a repeated question from different users/UI sessions; a one-off
+script or test run starts with an empty cache and gets no benefit, which is expected. Verified
+against the real embedding model: a repeated real query's second `embed()` call dropped from
+0.011s to 0.0s and returned bit-identical vectors, with zero calls into the underlying model.
+
 ## Evaluation
 
 All numbers below come from `data/evaluation/retrieval_eval_results.csv`,

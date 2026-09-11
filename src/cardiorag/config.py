@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     # --- Embeddings ---
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     embedding_device: Literal["auto", "cpu", "cuda"] = "auto"
+    # LRU cache size for repeated query embeddings in the API process (0
+    # disables caching entirely). Never applies to chunk/ingestion
+    # embedding, which is always a batch call and passes through untouched.
+    query_embedding_cache_size: int = Field(default=256, ge=0)
 
     # --- Reranking ---
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
