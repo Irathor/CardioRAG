@@ -40,7 +40,9 @@ ml = [
     "faiss-cpu>=1.8",
     "rank-bm25>=0.2",
 ]
-# Phase 8-9: grounded generation / LLM provider abstraction (OpenAI backend)
+# Phase 8-9: grounded generation / LLM provider abstraction (OpenAI backend).
+# huggingface_local (Phase 20 fix #7) needs no separate extra - it reuses
+# torch (ml) + transformers (tokenization), already required for embeddings.
 llm = [
     "openai>=1.0",
 ]

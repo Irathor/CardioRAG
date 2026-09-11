@@ -1,10 +1,17 @@
+import sys
 from types import SimpleNamespace
 
 import httpx
 import pytest
+import torch
 from openai import RateLimitError
 
-from cardiorag.generation.providers import OpenAIProvider, RetryingProvider, load_provider_from_settings
+from cardiorag.generation.providers import (
+    HuggingFaceLocalProvider,
+    OpenAIProvider,
+    RetryingProvider,
+    load_provider_from_settings,
+)
 
 
 def _rate_limit_error() -> RateLimitError:
@@ -146,3 +153,144 @@ def test_load_provider_from_settings_raises_for_unimplemented_provider():
 
     with pytest.raises(NotImplementedError):
         load_provider_from_settings(settings)
+
+
+def test_retrying_provider_still_works_when_openai_package_is_absent(monkeypatch):
+    """HuggingFaceLocalProvider never raises openai.RateLimitError and
+    shouldn't need the `openai` package installed at all - RetryingProvider
+    wraps every provider unconditionally (see api/dependencies.py), so it
+    must degrade gracefully rather than crash on the missing import."""
+    monkeypatch.setitem(sys.modules, "openai", None)
+
+    class _AlwaysSucceeds:
+        def generate(self, system_prompt: str, user_prompt: str) -> str:
+            return "ok"
+
+    provider = RetryingProvider(_AlwaysSucceeds())
+
+    assert provider.generate("sys", "user") == "ok"
+
+
+# --- HuggingFaceLocalProvider (Phase 20 fix #7) ---
+
+
+class _FakeLocalInputs(dict):
+    def to(self, device):
+        return self
+
+
+class _FakeLocalTokenizer:
+    eos_token_id = 999
+
+    def __init__(self):
+        self.last_messages = None
+        self.decoded_tokens = None
+
+    def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
+        self.last_messages = messages
+        return "PROMPT_TEXT"
+
+    def __call__(self, text, return_tensors="pt"):
+        return _FakeLocalInputs(input_ids=torch.tensor([[1, 2, 3]]))
+
+    def decode(self, tokens, skip_special_tokens=True):
+        self.decoded_tokens = tokens
+        return " a fake generated answer "
+
+
+class _FakeLocalModel:
+    def __init__(self):
+        self.generate_kwargs = None
+        self.device = None
+
+    def to(self, device):
+        self.device = device
+        return self
+
+    def eval(self):
+        return self
+
+    def generate(self, **kwargs):
+        self.generate_kwargs = kwargs
+        # Simulates real behavior: generate() returns the prompt tokens
+        # followed by newly generated ones (here, two: 10 and 11).
+        return torch.cat([kwargs["input_ids"], torch.tensor([[10, 11]])], dim=1)
+
+
+@pytest.fixture
+def fake_local_model(monkeypatch):
+    tokenizer = _FakeLocalTokenizer()
+    model = _FakeLocalModel()
+    monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", lambda *a, **k: tokenizer)
+    monkeypatch.setattr("transformers.AutoModelForCausalLM.from_pretrained", lambda *a, **k: model)
+    return tokenizer, model
+
+
+def test_hf_local_provider_uses_chat_template_with_system_and_user_roles(fake_local_model):
+    tokenizer, _ = fake_local_model
+    provider = HuggingFaceLocalProvider("fake-model", device="cpu")
+
+    provider.generate("a system prompt", "a user question")
+
+    assert tokenizer.last_messages == [
+        {"role": "system", "content": "a system prompt"},
+        {"role": "user", "content": "a user question"},
+    ]
+
+
+def test_hf_local_provider_decodes_only_newly_generated_tokens(fake_local_model):
+    tokenizer, _ = fake_local_model
+    provider = HuggingFaceLocalProvider("fake-model", device="cpu")
+
+    result = provider.generate("sys", "usr")
+
+    # 3 prompt tokens were fed in; only the 2 tokens generated after them
+    # (10, 11) should reach decode() - never an echo of the prompt.
+    assert tokenizer.decoded_tokens.tolist() == [10, 11]
+    assert result == "a fake generated answer"  # stripped of surrounding whitespace
+
+
+def test_hf_local_provider_decodes_greedily_with_configured_max_new_tokens(fake_local_model):
+    _, model = fake_local_model
+    provider = HuggingFaceLocalProvider("fake-model", device="cpu", max_new_tokens=128)
+
+    provider.generate("sys", "usr")
+
+    assert model.generate_kwargs["do_sample"] is False  # matches temperature=0.0 elsewhere
+    assert model.generate_kwargs["max_new_tokens"] == 128
+    assert model.generate_kwargs["pad_token_id"] == 999
+
+
+def test_hf_local_provider_resolves_auto_device_to_cpu_without_cuda(fake_local_model, monkeypatch):
+    monkeypatch.setattr("torch.cuda.is_available", lambda: False)
+    _, model = fake_local_model
+
+    HuggingFaceLocalProvider("fake-model", device="auto")
+
+    assert model.device == "cpu"
+
+
+def test_load_provider_from_settings_builds_hf_local_provider(monkeypatch):
+    from cardiorag.config import Settings
+
+    captured = {}
+
+    class _FakeProvider:
+        def __init__(self, model_name, device, max_new_tokens):
+            captured["model_name"] = model_name
+            captured["device"] = device
+            captured["max_new_tokens"] = max_new_tokens
+
+    monkeypatch.setattr("cardiorag.generation.providers.HuggingFaceLocalProvider", _FakeProvider)
+
+    settings = Settings(
+        _env_file=None,
+        llm_provider="huggingface_local",
+        huggingface_local_model="fake/model",
+        huggingface_local_device="cpu",
+        huggingface_local_max_new_tokens=256,
+    )
+    provider = load_provider_from_settings(settings)
+
+    assert isinstance(provider, _FakeProvider)
+    assert captured == {"model_name": "fake/model", "device": "cpu", "max_new_tokens": 256}

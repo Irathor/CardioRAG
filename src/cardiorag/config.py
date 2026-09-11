@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     groq_model: str = "qwen/qwen3.8-27b"
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3"
+    # Runs entirely offline via `transformers` once cached - no API key, no
+    # per-request network call, at a real quality cost vs. a much larger
+    # hosted model (see README). Qwen2.5-0.5B-Instruct: small enough for
+    # CPU-only inference to finish in a reasonable time for one request,
+    # Apache-2.0 licensed, ungated (no HF auth token needed to download it).
+    huggingface_local_model: str = "Qwen/Qwen2.5-0.5B-Instruct"
+    huggingface_local_device: Literal["auto", "cpu", "cuda"] = "auto"
+    huggingface_local_max_new_tokens: int = Field(default=512, gt=0)
 
     # --- Embeddings ---
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"

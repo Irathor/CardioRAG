@@ -112,6 +112,10 @@ example is not a measurement. The systematic 34-question evaluation is what sett
 protocol; `OpenAIProvider` implements it and, because Groq exposes an OpenAI-API-compatible
 endpoint, also serves Groq with zero new provider code — just a different `base_url` and model
 name. Real generation in this project runs on Groq's free tier for cost reasons.
+`HuggingFaceLocalProvider` proves the same abstraction extends to a genuinely different kind of
+backend — an in-process model, not an HTTP API at all — again with zero changes to
+`generator.py` or the API routes. Not the default: see Limitations for the real citation-format
+compliance gap measured against it.
 
 **References-section exclusion at the chunking source, not post-filtering.** A standalone
 "References"/"Bibliography" heading line — detected in *raw* text, before cleaning merges it into
@@ -367,8 +371,25 @@ actually running the system against real data, not anticipated in advance.
   not replace.
 - `looks_like_refusal` is a phrase-based heuristic anchored to observed real phrasing, not a
   semantic judgment — a model refusing in genuinely novel wording will be missed.
-- Only `OpenAIProvider` (which also serves Groq) is implemented; `huggingface_local` and a native
-  Ollama client raise `NotImplementedError` rather than fake support.
+- **Fixed, with a real measured caveat**: `HuggingFaceLocalProvider` (Phase 20 fix #7) runs
+  `Qwen/Qwen2.5-0.5B-Instruct` in-process via `transformers` — no API key, no per-request network
+  call, works fully offline once the model is cached. A native Ollama client still raises
+  `NotImplementedError`. Ran the real end-to-end pipeline against it for two real evaluation
+  questions ("What is MOCOnet used for?", "How does artificial intelligence improve cardiac MRI
+  segmentation?"): both produced fluent, topically relevant answers grounded in the retrieved
+  text, but **neither included a single `[Source N]` citation**, despite the same system prompt
+  that gets Groq/OpenAI models to cite reliably (see the `/query` example above). At 500M
+  parameters this model doesn't reliably follow that instruction-format constraint — a real
+  quality gap, not a bug, and the reason it's not the default `llm_provider`. `find_fabricated_quotes`
+  can't catch this failure mode either: with no quotes and no attribution to check, there's
+  nothing for it to flag. Also markedly slower on CPU (~40-60s/answer here vs. Groq's roughly
+  1-2s) — expected for local inference with no GPU, not a bug either. Deliberately did NOT run
+  the full quantitative Phase 13 suite (`scripts/evaluate_generation.py`) against it: that script
+  reuses the configured provider as its own LLM-judge, and this project already established (see
+  `groq_model`'s comment in `config.py`) that small models unreliably follow the
+  "return-only-JSON" judge instructions — a 500M model self-judging its own faithfulness would
+  produce numbers not trustworthy enough to report as a real measurement, which would defeat the
+  purpose of measuring anything at all.
 - **Fixed**: `retrieval/hybrid_retriever.py` combines dense retrieval with BM25 lexical search via
   Reciprocal Rank Fusion, beating dense-only on every metric on the real evaluation set (see
   Technical Decisions for the real `k=60` failure mode found and fixed along the way). Now the
