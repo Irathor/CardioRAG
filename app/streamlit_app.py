@@ -40,8 +40,12 @@ def _load_example_questions() -> list[str]:
 
 def _call_api(method: str, path: str, **kwargs):
     url = f"{settings.api_base_url}{path}"
+    # Sent even when settings.api_key is None (as an absent header, which
+    # require_api_key ignores) - simpler than branching on whether auth is
+    # configured, and correct either way (Phase 20 fix #6).
+    headers = {"X-API-Key": settings.api_key} if settings.api_key else {}
     try:
-        response = httpx.request(method, url, timeout=60.0, **kwargs)
+        response = httpx.request(method, url, timeout=60.0, headers=headers, **kwargs)
     except httpx.ConnectError:
         st.error(
             f"Could not reach the API at {settings.api_base_url}. Is it running?\n\n"

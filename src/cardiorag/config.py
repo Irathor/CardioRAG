@@ -67,6 +67,18 @@ class Settings(BaseSettings):
     # isn't a valid address to connect *to* from a client).
     api_base_url: str = "http://localhost:8000"
 
+    # --- API security (Phase 20 fix #6) ---
+    # A single shared secret, not per-user accounts - appropriate for a small
+    # research/demo deployment with a handful of trusted clients (the
+    # Streamlit UI, evaluation scripts), not a multi-tenant product. Left
+    # unset by default so the pre-fix behavior (fully open access) remains
+    # the default for local/dev use; an operator opts in by setting API_KEY.
+    api_key: str | None = None
+    # Fixed-window requests/minute per client IP, enforced on /retrieve,
+    # /query and /documents. Not applied to /health, which the Docker
+    # Compose healthcheck polls every 10s with plain curl and no credentials.
+    rate_limit_per_minute: int = 60
+
     # --- Logging ---
     log_level: str = "INFO"
 

@@ -13,9 +13,16 @@ must keep working - only `/query` actually needs it.
 
 from functools import lru_cache
 
+from fastapi import Depends, HTTPException, Request
+
+from cardiorag.api.rate_limit import RateLimiter
 from cardiorag.config import settings
 from cardiorag.embeddings.embedder import Embedder
-from cardiorag.generation.providers import LLMProvider, RetryingProvider, load_provider_from_settings
+from cardiorag.generation.providers import (
+    LLMProvider,
+    RetryingProvider,
+    load_provider_from_settings,
+)
 from cardiorag.retrieval.bm25_index import BM25Index
 from cardiorag.retrieval.hybrid_retriever import HybridRetriever
 from cardiorag.retrieval.reranker import Reranker
@@ -50,6 +57,17 @@ def get_retriever() -> HybridRetriever:
 @lru_cache(maxsize=1)
 def get_reranker() -> Reranker:
     return Reranker(settings.reranker_model, device=settings.embedding_device)
+
+
+@lru_cache(maxsize=1)
+def get_rate_limiter() -> RateLimiter:
+    return RateLimiter(settings.rate_limit_per_minute)
+
+
+def enforce_rate_limit(request: Request, limiter: RateLimiter = Depends(get_rate_limiter)) -> None:
+    client_id = request.client.host if request.client else "unknown"
+    if not limiter.allow(client_id):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
 
 @lru_cache(maxsize=1)

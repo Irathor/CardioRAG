@@ -262,12 +262,18 @@ python scripts/evaluate_generation.py   # requires an LLM API key; makes real ca
 
 ## API
 
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/health` | GET | Index status, chunk count, whether an LLM provider is configured |
-| `/retrieve` | POST | Dense retrieval only (no reranking, no generation) — for inspecting raw retrieval |
-| `/query` | POST | Full pipeline: retrieve → rerank → generate |
-| `/documents` | GET | List of indexed documents, grouped from chunk metadata |
+| Endpoint | Method | Auth / rate limit | Purpose |
+|---|---|---|---|
+| `/health` | GET | none (always open) | Index status, chunk count, whether an LLM provider is configured |
+| `/retrieve` | POST | `X-API-Key` + rate limit | Hybrid (dense + BM25) retrieval only (no reranking, no generation) — for inspecting raw retrieval |
+| `/query` | POST | `X-API-Key` + rate limit | Full pipeline: retrieve → rerank → generate |
+| `/documents` | GET | `X-API-Key` + rate limit | List of indexed documents, grouped from chunk metadata |
+
+Auth and rate limiting are both **opt-in**: with `API_KEY` unset (the default) they're disabled and
+every endpoint behaves as before. Set `API_KEY` and, optionally, `RATE_LIMIT_PER_MINUTE` (default
+60) in `.env` to require the header and cap requests per client IP — a missing/wrong key returns
+401, exceeding the budget returns 429. See Limitations for what this does and doesn't protect
+against.
 
 No `/evaluate` endpoint: retrieval/generation evaluation is a long-running batch process over
 dozens of LLM calls (see the generation evaluation saga in git history — five model swaps and two
@@ -372,25 +378,34 @@ actually running the system against real data, not anticipated in advance.
 - The corpus is 8 papers (395 chunks post-cleaning) — intentionally small for this project's
   scope; any metric here carries real sampling variance and should not be read as a claim about
   performance on a production-scale corpus.
-- No authentication or rate limiting on the API.
+- **Fixed**: `/retrieve`, `/query` and `/documents` now require an `X-API-Key` header (401 if
+  missing/wrong) and are rate-limited per client IP (429 past the configured budget) — both
+  disabled by default (`API_KEY` unset) so local/dev use and every prior test keep working
+  unchanged; an operator opts in via `.env`. `/health` is deliberately exempt from both, since the
+  Docker Compose healthcheck polls it every 10s with plain curl and no credentials. The rate
+  limiter is a small hand-rolled in-memory fixed-window counter (`api/rate_limit.py`), not a
+  library — consistent with this project's "no framework black-boxing" approach — and, being
+  per-process, is **not** correct across multiple API replicas (each would keep its own counters,
+  multiplying the effective limit); a real limitation for anything beyond a single instance.
+  Verified against a real running server: a wrong `X-API-Key` still consumes rate-limit budget
+  (closing a brute-force-the-key gap that would exist if auth were checked before throttling).
 - No CI/CD pipeline configured.
 - The Streamlit UI was verified to boot cleanly (server health checks, no tracebacks) but not
   interactively click-tested in a real browser — this environment has no browser automation tool.
 
 ## Future Work
 
-- Hybrid BM25 + dense retrieval, for exact-term queries dense embeddings miss.
 - Query expansion / decomposition for multi-part questions.
 - Section-type metadata tagged at ingestion (body / references / boilerplate / abstract) so
   retrieval can filter by section, rather than relying solely on the references-heading heuristic.
-- Content-level citation verification: compare a cited source's actual text against what the LLM
-  attributed to it, closing the gap the current range-only checker leaves open.
 - A larger corpus, to reduce sampling variance in the evaluation metrics.
 - Domain-fine-tuned embeddings (contrastive fine-tuning on cardiovascular QA pairs), now that
   SPECTER's off-the-shelf underperformance is measured rather than assumed away.
 - Figure/table extraction — currently text-only; a meaningful fraction of a CMR paper's evidence
   is in its figures.
-- CI/CD, API authentication/rate limiting, for anything beyond local/single-user use.
+- A distributed rate-limit store (e.g. Redis), if the API ever runs as more than one replica —
+  the current in-memory limiter is correct only for a single process.
+- CI/CD pipeline.
 
 ## License
 

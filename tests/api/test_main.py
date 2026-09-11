@@ -4,11 +4,14 @@ from fastapi.testclient import TestClient
 
 from cardiorag.api.dependencies import (
     get_llm_provider,
+    get_rate_limiter,
     get_reranker,
     get_retriever,
     get_vector_store,
 )
 from cardiorag.api.main import app
+from cardiorag.api.rate_limit import RateLimiter
+from cardiorag.config import settings
 from cardiorag.models import Chunk, RetrievedChunk
 from cardiorag.retrieval.reranker import RerankResult
 from cardiorag.retrieval.retriever import Retriever
@@ -59,7 +62,12 @@ class _FakeProvider:
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    # Auth off and rate limiting effectively unlimited by default: these are
+    # covered by their own dedicated tests below, and must not make every
+    # other test in this file depend on request count or a clean env.
+    monkeypatch.setattr(settings, "api_key", None)
+
     vector_store = build_vector_store(
         _normalized([[1, 0], [0, 1], [1, 0]]),
         [_make_chunk("c0", "docA", [1]), _make_chunk("c1", "docB", [3]), _make_chunk("c2", "docA", [4, 5])],
@@ -71,6 +79,8 @@ def client():
     app.dependency_overrides[get_retriever] = lambda: retriever
     app.dependency_overrides[get_reranker] = lambda: _FakeReranker()
     app.dependency_overrides[get_llm_provider] = lambda: _FakeProvider()
+    generous_limiter = RateLimiter(max_requests=10_000)
+    app.dependency_overrides[get_rate_limiter] = lambda: generous_limiter
 
     with TestClient(app) as test_client:
         yield test_client
@@ -152,3 +162,82 @@ def test_documents_groups_chunks_by_document_id(client):
     assert documents["docA"]["num_chunks"] == 2
     assert documents["docB"]["num_chunks"] == 1
     assert documents["docA"]["title"] == "A Test Paper"
+
+
+# --- Fix #6: API-key auth ---
+
+
+def test_protected_endpoint_rejects_missing_key_when_configured(client, monkeypatch):
+    monkeypatch.setattr(settings, "api_key", "secret123")
+
+    response = client.post("/retrieve", json={"question": "a real question"})
+
+    assert response.status_code == 401
+
+
+def test_protected_endpoint_rejects_wrong_key_when_configured(client, monkeypatch):
+    monkeypatch.setattr(settings, "api_key", "secret123")
+
+    response = client.post(
+        "/retrieve", json={"question": "a real question"}, headers={"X-API-Key": "wrong"}
+    )
+
+    assert response.status_code == 401
+
+
+def test_protected_endpoint_accepts_correct_key(client, monkeypatch):
+    monkeypatch.setattr(settings, "api_key", "secret123")
+
+    response = client.post(
+        "/retrieve", json={"question": "a real question"}, headers={"X-API-Key": "secret123"}
+    )
+
+    assert response.status_code == 200
+
+
+def test_health_never_requires_a_key_even_when_configured(client, monkeypatch):
+    monkeypatch.setattr(settings, "api_key", "secret123")
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+
+
+# --- Fix #6: rate limiting ---
+
+
+def test_protected_endpoint_returns_429_once_the_limit_is_exceeded(client):
+    # One instance reused across requests, not a fresh one per call - a
+    # fresh RateLimiter would never see a prior request and could never
+    # trigger 429 in this test.
+    limiter = RateLimiter(max_requests=1)
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+
+    first = client.get("/documents")
+    second = client.get("/documents")
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+
+
+def test_wrong_key_attempts_still_count_against_the_rate_limit(client, monkeypatch):
+    """A failed-auth request must still be throttled, or the rate limiter
+    does nothing to stop unlimited API-key brute-forcing (Phase 20 fix #6)."""
+    monkeypatch.setattr(settings, "api_key", "secret123")
+    limiter = RateLimiter(max_requests=1)
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+
+    first = client.post("/retrieve", json={"question": "q"}, headers={"X-API-Key": "wrong"})
+    second = client.post("/retrieve", json={"question": "q"}, headers={"X-API-Key": "wrong"})
+
+    assert first.status_code == 401
+    assert second.status_code == 429
+
+
+def test_health_is_never_rate_limited(client):
+    limiter = RateLimiter(max_requests=1)
+    app.dependency_overrides[get_rate_limiter] = lambda: limiter
+
+    for _ in range(5):
+        response = client.get("/health")
+        assert response.status_code == 200

@@ -37,6 +37,11 @@ services:
       # to the api service, not localhost - this is NOT the same value as
       # API_HOST_PORT above, which only matters for host-to-container access.
       - API_BASE_URL=http://api:8000
+      # Same secret the api service reads from .env (Phase 20 fix #6) - the
+      # ui service has no env_file of its own, so this must be forwarded
+      # explicitly or the UI's requests would be rejected with 401 whenever
+      # API_KEY is set. Empty when unset, matching auth-disabled.
+      - API_KEY=${API_KEY:-}
     depends_on:
       api:
         condition: service_healthy

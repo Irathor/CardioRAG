@@ -14,7 +14,14 @@ import uuid
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from cardiorag.api.dependencies import get_llm_provider, get_reranker, get_retriever, get_vector_store
+from cardiorag.api.auth import require_api_key
+from cardiorag.api.dependencies import (
+    enforce_rate_limit,
+    get_llm_provider,
+    get_reranker,
+    get_retriever,
+    get_vector_store,
+)
 from cardiorag.api.schemas import (
     CitationWarning,
     DocumentInfo,
@@ -98,6 +105,10 @@ def _to_source_info(retrieved: RetrievedChunk) -> SourceInfo:
 
 @app.get("/health", response_model=HealthResponse)
 def health(vector_store: VectorStore = Depends(get_vector_store)) -> HealthResponse:
+    """Deliberately exempt from require_api_key/enforce_rate_limit (Phase 20
+    fix #6): the Docker Compose healthcheck polls this every 10s with plain
+    curl and no credentials, and it exposes nothing more sensitive than
+    whether the process is up."""
     llm_configured = (
         (settings.llm_provider == "openai" and bool(settings.openai_api_key))
         or (settings.llm_provider == "groq" and bool(settings.groq_api_key))
@@ -112,7 +123,16 @@ def health(vector_store: VectorStore = Depends(get_vector_store)) -> HealthRespo
 
 @app.post("/retrieve", response_model=RetrieveResponse)
 def retrieve(
-    request: RetrieveRequest, retriever: HybridRetriever = Depends(get_retriever)
+    request: RetrieveRequest,
+    retriever: HybridRetriever = Depends(get_retriever),
+    # Rate limit checked BEFORE the API key (Phase 20 fix #6): otherwise a
+    # rejected (401) request never reaches enforce_rate_limit, and an
+    # attacker could brute-force the key with unlimited unthrottled guesses.
+    # Charging the per-IP budget first closes that gap at the cost of a
+    # wrong key also consuming it - an acceptable tradeoff for a
+    # single-shared-secret setup.
+    _rate_limit: None = Depends(enforce_rate_limit),
+    _auth: None = Depends(require_api_key),
 ) -> RetrieveResponse:
     start = time.perf_counter()
     try:
@@ -134,6 +154,8 @@ def query(
     retriever: HybridRetriever = Depends(get_retriever),
     reranker: Reranker = Depends(get_reranker),
     provider: LLMProvider = Depends(get_llm_provider),
+    _rate_limit: None = Depends(enforce_rate_limit),
+    _auth: None = Depends(require_api_key),
 ) -> QueryResponse:
     start = time.perf_counter()
     try:
@@ -167,7 +189,11 @@ def query(
 
 
 @app.get("/documents", response_model=DocumentsResponse)
-def documents(vector_store: VectorStore = Depends(get_vector_store)) -> DocumentsResponse:
+def documents(
+    vector_store: VectorStore = Depends(get_vector_store),
+    _rate_limit: None = Depends(enforce_rate_limit),
+    _auth: None = Depends(require_api_key),
+) -> DocumentsResponse:
     by_document: dict[str, DocumentInfo] = {}
     for chunk in vector_store.chunks:
         if chunk.document_id not in by_document:
