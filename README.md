@@ -4,7 +4,30 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 14 — experiment tracking. Every significant retrieval/generation experiment run
+**Status:** Phase 15 — REST API. `src/cardiorag/api/` exposes the pipeline over FastAPI: `GET
+/health`, `POST /retrieve` (dense retrieval only), `POST /query` (retrieve -> rerank -> generate,
+matching the master spec's response shape), `GET /documents`. No `/evaluate` endpoint - retrieval/
+generation evaluation is a long batch process over dozens of LLM calls (see Phase 13's saga),
+not a request/response operation; the evaluation scripts remain the right interface for that.
+
+One deliberate deviation from the spec's `/query` example: it shows a single `"page": 7`, but
+chunks have carried `page_numbers: list[int]` since Phase 3 (a chunk can span a page boundary) -
+`SourceInfo.pages` is a list here rather than force-fitting the simplified example and losing
+real citation information.
+
+The embedding model, FAISS index, and reranker are loaded once as cached singletons
+(`api/dependencies.py`, `Depends()`-injected so tests can swap in fakes); the LLM provider is
+loaded lazily so `/health`, `/retrieve`, and `/documents` keep working even with no API key
+configured - only `/query` needs one, and returns 503 with a clear message if it's missing
+(caught via a dedicated `ValueError` exception handler, since that failure happens during FastAPI's
+dependency resolution, before the route body's own try/except could see it).
+
+Verified against the real server, not just the test suite: started the actual app with `uvicorn`
+against the real persisted index (395 chunks) and real Groq provider. `/health` correctly reported
+`num_chunks: 395`; `/query` for "What faithfulness metric does Ragas use?" returned a grounded,
+correctly-sourced answer end-to-end over real HTTP.
+
+Underneath, Phase 14 — experiment tracking. Every significant retrieval/generation experiment run
 in Phases 12-13 is now a typed `ExperimentRecord` (`src/cardiorag/models.py`) in
 `data/evaluation/experiments.jsonl` (14 records), instead of living only as ad hoc CSVs with
 "fixed" baseline parameters buried as constants inside each script. `experiment_tracking.py`

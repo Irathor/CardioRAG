@@ -1,0 +1,155 @@
+"""FastAPI backend (Phase 15) exposing the CardioRAG pipeline over HTTP.
+
+No /evaluate endpoint: retrieval/generation evaluation (Phases 12-13) is a
+long-running batch process over dozens of LLM calls, not a request/response
+operation - forcing it behind a synchronous HTTP endpoint would either time
+out real clients or require background-job infrastructure that doesn't
+exist yet. The evaluation scripts remain the right interface for that.
+"""
+
+import logging
+import time
+
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+
+from cardiorag.api.dependencies import get_llm_provider, get_reranker, get_retriever, get_vector_store
+from cardiorag.api.schemas import (
+    DocumentInfo,
+    DocumentsResponse,
+    HealthResponse,
+    QueryRequest,
+    QueryResponse,
+    RetrieveRequest,
+    RetrieveResponse,
+    SourceInfo,
+)
+from cardiorag.config import settings
+from cardiorag.generation.generator import generate_answer
+from cardiorag.generation.providers import LLMProvider
+from cardiorag.models import RetrievedChunk
+from cardiorag.retrieval.reranker import Reranker
+from cardiorag.retrieval.retriever import Retriever
+from cardiorag.retrieval.vector_store import VectorStore
+
+logger = logging.getLogger(__name__)
+
+app = FastAPI(
+    title="CardioRAG API",
+    description=(
+        "Research/educational RAG system over cardiovascular MRI and AI literature. "
+        "NOT a medical diagnostic system; output is not medical advice."
+    ),
+    version="0.1.0",
+)
+
+
+def _to_source_info(retrieved: RetrievedChunk) -> SourceInfo:
+    chunk = retrieved.chunk
+    return SourceInfo(
+        title=chunk.title,
+        pages=chunk.page_numbers,
+        doi=chunk.doi,
+        chunk_id=chunk.chunk_id,
+        document_id=chunk.document_id,
+        score=retrieved.score,
+        text=chunk.text,
+    )
+
+
+@app.get("/health", response_model=HealthResponse)
+def health(vector_store: VectorStore = Depends(get_vector_store)) -> HealthResponse:
+    llm_configured = (
+        (settings.llm_provider == "openai" and bool(settings.openai_api_key))
+        or (settings.llm_provider == "groq" and bool(settings.groq_api_key))
+    )
+    return HealthResponse(
+        status="ok",
+        index_loaded=True,
+        num_chunks=vector_store.index.ntotal,
+        llm_provider_configured=llm_configured,
+    )
+
+
+@app.post("/retrieve", response_model=RetrieveResponse)
+def retrieve(
+    request: RetrieveRequest, retriever: Retriever = Depends(get_retriever)
+) -> RetrieveResponse:
+    start = time.perf_counter()
+    try:
+        results = retriever.retrieve(request.question, top_k=request.top_k)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    latency_ms = int((time.perf_counter() - start) * 1000)
+    return RetrieveResponse(
+        question=request.question,
+        results=[_to_source_info(r) for r in results],
+        latency_ms=latency_ms,
+    )
+
+
+@app.post("/query", response_model=QueryResponse)
+def query(
+    request: QueryRequest,
+    retriever: Retriever = Depends(get_retriever),
+    reranker: Reranker = Depends(get_reranker),
+    provider: LLMProvider = Depends(get_llm_provider),
+) -> QueryResponse:
+    start = time.perf_counter()
+    try:
+        candidates = retriever.retrieve(request.question, top_k=request.retrieve_k)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    rerank_result = reranker.rerank(request.question, candidates, top_k=request.top_k)
+
+    try:
+        result = generate_answer(provider, request.question, rerank_result.reranked)
+    except Exception as exc:
+        logger.exception("Generation failed for question: %r", request.question)
+        raise HTTPException(status_code=502, detail="The LLM provider failed to generate an answer.") from exc
+
+    latency_ms = int((time.perf_counter() - start) * 1000)
+    return QueryResponse(
+        question=result.question,
+        answer=result.answer,
+        sources=[_to_source_info(r) for r in result.sources],
+        latency_ms=latency_ms,
+    )
+
+
+@app.get("/documents", response_model=DocumentsResponse)
+def documents(vector_store: VectorStore = Depends(get_vector_store)) -> DocumentsResponse:
+    by_document: dict[str, DocumentInfo] = {}
+    for chunk in vector_store.chunks:
+        if chunk.document_id not in by_document:
+            by_document[chunk.document_id] = DocumentInfo(
+                document_id=chunk.document_id,
+                title=chunk.title,
+                doi=chunk.doi,
+                filename=chunk.source_filename,
+                num_chunks=0,
+            )
+        by_document[chunk.document_id].num_chunks += 1
+
+    return DocumentsResponse(documents=list(by_document.values()))
+
+
+@app.exception_handler(ValueError)
+def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
+    # Raised by get_llm_provider (Depends) when the configured provider's API
+    # key is missing - a server misconfiguration, not a client error nor an
+    # unexpected crash, hence 503 rather than 400 or 500.
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(NotImplementedError)
+def not_implemented_handler(request: Request, exc: NotImplementedError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(Exception)
+def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
