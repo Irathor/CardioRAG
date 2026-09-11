@@ -5,7 +5,6 @@ live-network verification against this project's actual corpus DOIs.
 """
 
 import httpx
-import pytest
 
 from cardiorag.ingestion.crossref import enrich_metadata_from_crossref, fetch_crossref_work
 from cardiorag.models import DocumentMetadata

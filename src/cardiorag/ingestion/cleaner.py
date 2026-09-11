@@ -13,7 +13,7 @@ inspectable.
 import re
 
 from cardiorag.ingestion.text_analysis import find_repeated_first_lines, find_repeated_last_lines
-from cardiorag.models import Document, PageContent
+from cardiorag.models import Document
 
 # Joins a hyphen-broken line by removing only the newline, keeping the hyphen.
 # "informa-\ntion" -> "informa-tion" (imperfect but not fabricated), while a

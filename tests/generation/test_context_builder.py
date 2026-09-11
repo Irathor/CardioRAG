@@ -3,16 +3,16 @@ from cardiorag.models import Chunk, RetrievedChunk
 
 
 def _make_retrieved(**overrides) -> RetrievedChunk:
-    defaults = dict(
-        chunk_id="c0",
-        document_id="doc1",
-        text="Cardiac MRI provides high spatial resolution.",
-        token_count=8,
-        page_numbers=[4, 5],
-        title="A Test Paper",
-        doi="10.1/test",
-        source_filename="synthetic.pdf",
-    )
+    defaults = {
+        "chunk_id": "c0",
+        "document_id": "doc1",
+        "text": "Cardiac MRI provides high spatial resolution.",
+        "token_count": 8,
+        "page_numbers": [4, 5],
+        "title": "A Test Paper",
+        "doi": "10.1/test",
+        "source_filename": "synthetic.pdf",
+    }
     defaults.update(overrides)
     score = defaults.pop("score", 0.8)
     return RetrievedChunk(chunk=Chunk(**defaults), score=score)

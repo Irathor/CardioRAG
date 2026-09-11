@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from cardiorag.retrieval.vector_store import VectorStore, build_vector_store
 from cardiorag.models import Chunk
+from cardiorag.retrieval.vector_store import VectorStore, build_vector_store
 
 
 def _make_chunk(chunk_id: str) -> Chunk:

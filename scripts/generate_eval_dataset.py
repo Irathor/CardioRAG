@@ -13,7 +13,6 @@ the 8 PDFs in data/corpus/ as of this dataset's creation - if the corpus
 changes, these must be re-verified.
 """
 
-import json
 from pathlib import Path
 
 from cardiorag.models import EvaluationCategory, EvaluationExample

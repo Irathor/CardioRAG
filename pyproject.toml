@@ -82,3 +82,11 @@ pythonpath = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.ruff.lint]
+# B008 (function call in a default argument) is FastAPI's own canonical
+# Depends(...) pattern, used throughout api/main.py and api/dependencies.py
+# - not a real bug, just this rule's usual false positive for this specific
+# framework idiom. Ignored here (rather than silently tolerated forever)
+# now that CI actually gates on `ruff check .` passing.
+ignore = ["B008"]

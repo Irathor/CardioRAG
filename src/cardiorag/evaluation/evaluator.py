@@ -10,8 +10,8 @@ from cardiorag.evaluation.retrieval_metrics import (
     hit_rate,
     ndcg_at_k,
     precision_at_k,
-    reciprocal_rank,
     recall_at_k,
+    reciprocal_rank,
 )
 from cardiorag.models import Chunk, EvaluationExample, RetrievedChunk
 

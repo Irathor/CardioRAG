@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      # Cached across runs: the embedder/reranker test fixtures (conftest.py)
+      # download real, small public models from the Hugging Face Hub (no
+      # token needed) - caching avoids re-downloading them on every run.
+      - name: Cache Hugging Face models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-cache-${{ runner.os }}
+
+      # Every extra needed to run the full suite - no LLM API keys required,
+      # every provider-dependent test uses a fake/mock provider instead of a
+      # real network call (see tests/generation/test_providers.py).
+      - name: Install dependencies
+        run: pip install -e ".[ingestion,tokenization,ml,api,ui,llm,eval,dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Test (pytest)
+        run: pytest -q

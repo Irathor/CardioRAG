@@ -5,7 +5,6 @@ embedding model changes.
 """
 
 import logging
-from pathlib import Path
 
 from cardiorag.config import settings
 from cardiorag.embeddings.store import load_embeddings

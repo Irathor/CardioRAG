@@ -54,7 +54,7 @@ class ChunkingConfig:
             raise ValueError("min_alpha_ratio must be between 0.0 and 1.0")
 
 
-def _page_text(page) -> str:  # noqa: ANN001 - PageContent, kept loose to avoid a circular import
+def _page_text(page) -> str:
     return page.cleaned_text if page.cleaned_text is not None else page.raw_text
 
 

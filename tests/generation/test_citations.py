@@ -9,16 +9,16 @@ from cardiorag.models import Chunk, RetrievedChunk
 
 
 def _make_retrieved(chunk_id: str, document_id: str, pages: list[int], score: float = 0.8, **overrides) -> RetrievedChunk:
-    defaults = dict(
-        chunk_id=chunk_id,
-        document_id=document_id,
-        text="some text",
-        token_count=5,
-        page_numbers=pages,
-        title=f"Paper {document_id}",
-        doi=f"10.1/{document_id}",
-        source_filename=f"{document_id}.pdf",
-    )
+    defaults = {
+        "chunk_id": chunk_id,
+        "document_id": document_id,
+        "text": "some text",
+        "token_count": 5,
+        "page_numbers": pages,
+        "title": f"Paper {document_id}",
+        "doi": f"10.1/{document_id}",
+        "source_filename": f"{document_id}.pdf",
+    }
     defaults.update(overrides)
     return RetrievedChunk(chunk=Chunk(**defaults), score=score)
 

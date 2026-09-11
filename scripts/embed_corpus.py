@@ -4,7 +4,6 @@ re-embedded just to start the app or run an experiment again.
 """
 
 import logging
-from pathlib import Path
 
 from cardiorag.chunking.chunker import ChunkingConfig, chunk_document
 from cardiorag.config import settings

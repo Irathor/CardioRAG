@@ -34,10 +34,14 @@ def synthetic_corpus(tmp_path: Path) -> Path:
     _write_pdf(
         corpus_dir / "cardiac.pdf",
         pages=[
-            "Deep learning enables automated segmentation of the left ventricle in "
-            "cardiac magnetic resonance imaging, reducing analysis time for clinicians.",
-            "Convolutional neural networks trained on large annotated datasets achieve "
-            "high accuracy in delineating myocardial borders on cine MRI sequences.",
+            (
+                "Deep learning enables automated segmentation of the left ventricle in "
+                "cardiac magnetic resonance imaging, reducing analysis time for clinicians."
+            ),
+            (
+                "Convolutional neural networks trained on large annotated datasets achieve "
+                "high accuracy in delineating myocardial borders on cine MRI sequences."
+            ),
             "References",
             "[1] Smith J, Doe A. Deep learning for cardiac segmentation. J Cardiovasc Imaging 2021.",
         ],
@@ -46,8 +50,10 @@ def synthetic_corpus(tmp_path: Path) -> Path:
     _write_pdf(
         corpus_dir / "unrelated.pdf",
         pages=[
-            "Quarterly earnings reports show significant growth in the technology sector "
-            "driven by increased consumer spending on electronics.",
+            (
+                "Quarterly earnings reports show significant growth in the technology sector "
+                "driven by increased consumer spending on electronics."
+            ),
             "References",
             "[1] Jones B. Market trends in consumer electronics. Econ Rev 2020.",
         ],

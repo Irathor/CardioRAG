@@ -1,4 +1,3 @@
-import pytest
 
 from cardiorag.models import Chunk, RetrievedChunk
 from cardiorag.retrieval.reranker import RerankResult

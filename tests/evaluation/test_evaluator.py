@@ -22,15 +22,15 @@ def _chunk(chunk_id: str, document_id: str, pages: list[int]) -> Chunk:
 
 
 def _example(**overrides) -> EvaluationExample:
-    defaults = dict(
-        id="q1",
-        question="a question",
-        category=EvaluationCategory.FACTUAL,
-        expected_document_ids=["docA"],
-        expected_pages=[3],
-        reference_answer="ref",
-        answerable=True,
-    )
+    defaults = {
+        "id": "q1",
+        "question": "a question",
+        "category": EvaluationCategory.FACTUAL,
+        "expected_document_ids": ["docA"],
+        "expected_pages": [3],
+        "reference_answer": "ref",
+        "answerable": True,
+    }
     defaults.update(overrides)
     return EvaluationExample(**defaults)
 

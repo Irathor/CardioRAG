@@ -227,12 +227,22 @@ python -m venv .venv
 .venv\Scripts\activate               # Windows; `source .venv/bin/activate` on Linux/macOS
 pip install -e ".[ingestion,tokenization,ml,api,ui,llm,eval,dev]"
 cp .env.example .env                 # then fill in OPENAI_API_KEY or GROQ_API_KEY
-pytest                                # 194 tests
+pytest                                # 268 tests
+ruff check .                          # same lint gate CI runs
 ```
 
 Dependency groups are split so you only install what a given phase needs — see the comments in
 `pyproject.toml`. A free Groq API key (OpenAI-API-compatible, no cost) works with
 `LLM_PROVIDER=groq` in `.env`; see `.env.example`.
+
+**CI**: `.github/workflows/ci.yml` runs exactly those two commands (`ruff check .`, `pytest -q`) on
+every push/PR to `master`, on a fresh `ubuntu-latest` runner with every extra installed — no LLM
+API keys needed, since every provider-dependent test uses a fake/mock provider rather than a real
+network call (see `tests/generation/test_providers.py`); the embedder/reranker fixtures do
+download two small public models from the Hugging Face Hub, cached across runs via
+`actions/cache`. Written and verified by running the identical commands locally (all 268 tests and
+a clean lint pass on this exact codebase) — not verified running on GitHub Actions itself, since
+this repository has no configured git remote to push to yet.
 
 Build the index once before running the API/UI/scripts against real data:
 ```bash
@@ -499,7 +509,6 @@ actually running the system against real data, not anticipated in advance.
   SPECTER's off-the-shelf underperformance is measured rather than assumed away.
 - Figure/table extraction — currently text-only; a meaningful fraction of a CMR paper's evidence
   is in its figures.
-- CI/CD pipeline.
 - Wire the Streamlit UI up to `/query/stream` instead of blocking `/query` — the endpoint exists
   and is tested, but the UI doesn't consume it yet, so the slow local-provider path (Fix #7) still
   shows nothing until the full answer is ready in the UI specifically.

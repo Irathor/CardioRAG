@@ -9,18 +9,18 @@ from cardiorag.models import ExperimentRecord
 
 
 def _make_record(**overrides) -> ExperimentRecord:
-    defaults = dict(
-        experiment_id="EXP-000",
-        date="2026-09-10",
-        description="a test experiment",
-        embedding_model="sentence-transformers/all-MiniLM-L6-v2",
-        chunk_size=256,
-        chunk_overlap=32,
-        retrieval_top_k=5,
-        reranking_enabled=False,
-        final_context_size=5,
-        retrieval_metrics={"hit_rate": 0.8, "mrr": 0.6},
-    )
+    defaults = {
+        "experiment_id": "EXP-000",
+        "date": "2026-09-10",
+        "description": "a test experiment",
+        "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+        "chunk_size": 256,
+        "chunk_overlap": 32,
+        "retrieval_top_k": 5,
+        "reranking_enabled": False,
+        "final_context_size": 5,
+        "retrieval_metrics": {"hit_rate": 0.8, "mrr": 0.6},
+    }
     defaults.update(overrides)
     return ExperimentRecord(**defaults)
 
