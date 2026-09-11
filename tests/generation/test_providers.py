@@ -1,3 +1,4 @@
+import queue
 import sys
 from types import SimpleNamespace
 
@@ -53,7 +54,74 @@ def test_retrying_provider_raises_after_exhausting_retries(monkeypatch):
     with pytest.raises(RateLimitError):
         provider.generate("sys", "user")
 
-    assert flaky.call_count == 3  # initial attempt + 2 retries
+
+class _FlakyStreamingProvider:
+    """Raises RateLimitError a fixed number of times *before yielding
+    anything*, then succeeds - simulates the real failure mode this covers:
+    a rate limit hit on the request itself, before any output exists."""
+
+    def __init__(self, fail_times: int, pieces: list[str] | None = None):
+        self._fail_times = fail_times
+        self._pieces = pieces if pieces is not None else ["ok"]
+        self.call_count = 0
+
+    def stream(self, system_prompt: str, user_prompt: str):
+        self.call_count += 1
+        if self.call_count <= self._fail_times:
+            raise _rate_limit_error()
+        yield from self._pieces
+
+
+class _MidStreamFailureProvider:
+    """Yields one real piece, then raises - simulates a rate limit (or any
+    error) that only surfaces after output has already reached the caller."""
+
+    def __init__(self):
+        self.call_count = 0
+
+    def stream(self, system_prompt: str, user_prompt: str):
+        self.call_count += 1
+        yield "partial answer "
+        raise _rate_limit_error()
+
+
+def test_retrying_provider_stream_retries_before_any_output_and_succeeds(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    flaky = _FlakyStreamingProvider(fail_times=2, pieces=["hel", "lo"])
+    provider = RetryingProvider(flaky, max_retries=5, base_delay_seconds=0.01)
+
+    result = list(provider.stream("sys", "user"))
+
+    assert result == ["hel", "lo"]
+    assert flaky.call_count == 3
+
+
+def test_retrying_provider_stream_raises_after_exhausting_retries(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda seconds: None)
+    flaky = _FlakyStreamingProvider(fail_times=10)
+    provider = RetryingProvider(flaky, max_retries=2, base_delay_seconds=0.01)
+
+    with pytest.raises(RateLimitError):
+        list(provider.stream("sys", "user"))
+
+
+def test_retrying_provider_stream_does_not_retry_once_a_piece_was_already_yielded():
+    """The core correctness fix: retrying after output has already reached
+    the caller would re-send already-streamed text with no way for the
+    caller to undo it - so a failure here must propagate, not retry."""
+    mid_stream_failure = _MidStreamFailureProvider()
+    provider = RetryingProvider(mid_stream_failure, max_retries=5, base_delay_seconds=0.01)
+
+    # A for-loop, not list(...): the generator raises partway through, and
+    # list() would discard whatever it had already collected internally
+    # once the exception propagates - this needs the partial result kept.
+    collected = []
+    with pytest.raises(RateLimitError):
+        for piece in provider.stream("sys", "user"):
+            collected.append(piece)  # noqa: PERF402
+
+    assert collected == ["partial answer "]
+    assert mid_stream_failure.call_count == 1  # never retried
 
 
 def test_openai_provider_sends_correct_messages_and_returns_content(monkeypatch):
@@ -101,6 +169,32 @@ def test_openai_provider_handles_empty_content(monkeypatch):
     provider = OpenAIProvider(model="gpt-4o-mini", api_key="fake-key")
 
     assert provider.generate("sys", "user") == ""
+
+
+def test_openai_provider_stream_yields_each_deltas_content(monkeypatch):
+    def _delta_chunk(content):
+        return SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=content))])
+
+    captured_calls = []
+
+    class _FakeCompletions:
+        def create(self, **kwargs):
+            captured_calls.append(kwargs)
+            # A real streaming response also includes an empty/None final
+            # delta chunk - must be skipped, not yielded as an empty piece.
+            return iter([_delta_chunk("Hel"), _delta_chunk("lo"), _delta_chunk(None)])
+
+    class _FakeOpenAIClient:
+        def __init__(self, api_key=None, base_url=None):
+            self.chat = SimpleNamespace(completions=_FakeCompletions())
+
+    monkeypatch.setattr("openai.OpenAI", _FakeOpenAIClient)
+
+    provider = OpenAIProvider(model="gpt-4o-mini", api_key="fake-key")
+    result = list(provider.stream("system prompt", "user prompt"))
+
+    assert result == ["Hel", "lo"]
+    assert captured_calls[0]["stream"] is True
 
 
 def test_load_provider_from_settings_raises_without_api_key():
@@ -212,9 +306,44 @@ class _FakeLocalModel:
 
     def generate(self, **kwargs):
         self.generate_kwargs = kwargs
+        streamer = kwargs.get("streamer")
+        if streamer is not None:
+            # Real transformers streaming generate() pushes text into the
+            # streamer and its return value goes unused (it's invoked via a
+            # background Thread) - mirror that instead of returning a tensor.
+            for piece in ["Hel", "lo"]:
+                streamer.put_text(piece)
+            streamer.end()
+            return None
         # Simulates real behavior: generate() returns the prompt tokens
         # followed by newly generated ones (here, two: 10 and 11).
         return torch.cat([kwargs["input_ids"], torch.tensor([[10, 11]])], dim=1)
+
+
+class _FakeTextIteratorStreamer:
+    """Mirrors real TextIteratorStreamer's actual interface (also a
+    thread-safe queue-backed iterator) so it behaves correctly regardless
+    of whether the producer thread runs before or after iteration starts."""
+
+    def __init__(self, tokenizer, skip_prompt=True, skip_special_tokens=True):
+        self.skip_prompt = skip_prompt
+        self.skip_special_tokens = skip_special_tokens
+        self._queue: queue.Queue = queue.Queue()
+
+    def put_text(self, text):
+        self._queue.put(text)
+
+    def end(self):
+        self._queue.put(None)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        value = self._queue.get()
+        if value is None:
+            raise StopIteration
+        return value
 
 
 @pytest.fixture
@@ -223,6 +352,7 @@ def fake_local_model(monkeypatch):
     model = _FakeLocalModel()
     monkeypatch.setattr("transformers.AutoTokenizer.from_pretrained", lambda *a, **k: tokenizer)
     monkeypatch.setattr("transformers.AutoModelForCausalLM.from_pretrained", lambda *a, **k: model)
+    monkeypatch.setattr("transformers.TextIteratorStreamer", _FakeTextIteratorStreamer)
     return tokenizer, model
 
 
@@ -268,6 +398,32 @@ def test_hf_local_provider_resolves_auto_device_to_cpu_without_cuda(fake_local_m
     HuggingFaceLocalProvider("fake-model", device="auto")
 
     assert model.device == "cpu"
+
+
+def test_hf_local_provider_stream_yields_pieces_from_the_streamer(fake_local_model):
+    provider = HuggingFaceLocalProvider("fake-model", device="cpu")
+
+    result = list(provider.stream("sys", "usr"))
+
+    assert result == ["Hel", "lo"]
+
+
+def test_hf_local_provider_stream_requests_prompt_and_special_tokens_skipped(fake_local_model, monkeypatch):
+    captured = {}
+    real_streamer_cls = _FakeTextIteratorStreamer
+
+    class _CapturingStreamer(real_streamer_cls):
+        def __init__(self, tokenizer, skip_prompt=True, skip_special_tokens=True):
+            captured["skip_prompt"] = skip_prompt
+            captured["skip_special_tokens"] = skip_special_tokens
+            super().__init__(tokenizer, skip_prompt, skip_special_tokens)
+
+    monkeypatch.setattr("transformers.TextIteratorStreamer", _CapturingStreamer)
+    provider = HuggingFaceLocalProvider("fake-model", device="cpu")
+
+    list(provider.stream("sys", "usr"))
+
+    assert captured == {"skip_prompt": True, "skip_special_tokens": True}
 
 
 def test_load_provider_from_settings_builds_hf_local_provider(monkeypatch):

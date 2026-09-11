@@ -10,6 +10,7 @@ so itself.
 
 import logging
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from cardiorag.generation.context_builder import build_context
@@ -63,3 +64,23 @@ def generate_answer(
         sources=retrieved_chunks,
         generation_seconds=elapsed,
     )
+
+
+def stream_answer(
+    provider: LLMProvider,
+    question: str,
+    retrieved_chunks: list[RetrievedChunk],
+) -> Iterator[str]:
+    """Same grounding logic as generate_answer(), yielding the answer
+    incrementally instead of returning it all at once - for the streaming
+    API endpoint (project improvement round). The no-evidence refusal still
+    short-circuits before any LLM call, yielded as a single piece so a
+    caller consuming either function's output sees text either way."""
+    if not retrieved_chunks:
+        logger.info("No chunks retrieved for question - refusing without calling the LLM")
+        yield INSUFFICIENT_EVIDENCE_MESSAGE
+        return
+
+    context = build_context(retrieved_chunks)
+    user_prompt = build_user_prompt(question, context)
+    yield from provider.stream(SYSTEM_PROMPT, user_prompt)

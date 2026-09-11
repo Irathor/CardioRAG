@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -31,6 +33,18 @@ def _make_chunk(chunk_id: str, document_id: str = "doc1", pages: list[int] | Non
     )
 
 
+def _parse_sse(text: str) -> list[tuple[str, dict]]:
+    events = []
+    for block in text.strip("\n").split("\n\n"):
+        if not block.strip():
+            continue
+        lines = block.split("\n")
+        event_line = next(line for line in lines if line.startswith("event: "))
+        data_line = next(line for line in lines if line.startswith("data: "))
+        events.append((event_line[len("event: ") :], json.loads(data_line[len("data: ") :])))
+    return events
+
+
 def _normalized(vectors: list[list[float]]) -> np.ndarray:
     arr = np.array(vectors, dtype=np.float32)
     return arr / np.linalg.norm(arr, axis=1, keepdims=True)
@@ -59,6 +73,12 @@ class _FakeReranker:
 class _FakeProvider:
     def generate(self, system_prompt: str, user_prompt: str) -> str:
         return "a grounded answer [Source 1]"
+
+    def stream(self, system_prompt: str, user_prompt: str):
+        # Split on spaces (keeping them) so the joined pieces reconstruct
+        # generate()'s exact text - both /query and /query/stream should
+        # agree on what this fake "answers".
+        yield from ["a ", "grounded ", "answer ", "[Source 1]"]
 
 
 @pytest.fixture
@@ -152,6 +172,69 @@ def test_query_returns_503_when_llm_provider_misconfigured(client):
 
     assert response.status_code == 503
     assert "GROQ_API_KEY" in response.json()["detail"]
+
+
+# --- /query/stream (SSE, project improvement round) ---
+
+
+def test_query_stream_emits_sources_then_tokens_then_done(client):
+    response = client.post("/query/stream", json={"question": "a real question", "top_k": 2})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = _parse_sse(response.text)
+
+    assert events[0][0] == "sources"
+    assert len(events[0][1]["sources"]) == 2
+
+    token_events = [e for e in events if e[0] == "token"]
+    assert len(token_events) == 4  # matches _FakeProvider.stream()'s 4 pieces
+    reconstructed = "".join(e[1]["text"] for e in token_events)
+    assert reconstructed == "a grounded answer [Source 1]"
+
+    assert events[-1][0] == "done"
+    assert events[-1][1]["answer"] == "a grounded answer [Source 1]"
+    assert events[-1][1]["citation_warnings"] == []
+    assert isinstance(events[-1][1]["latency_ms"], int)
+
+
+def test_query_stream_rejects_empty_question_before_streaming_starts(client):
+    response = client.post("/query/stream", json={"question": "   "})
+
+    assert response.status_code == 400
+    assert response.headers["content-type"].startswith("application/json")
+
+
+def test_query_stream_surfaces_citation_warnings_for_a_fabricated_quote(client):
+    class _FabricatingStreamingProvider:
+        def stream(self, system_prompt: str, user_prompt: str):
+            yield '[Source 1] states: "a completely fabricated sentence not in any real source."'
+
+    app.dependency_overrides[get_llm_provider] = lambda: _FabricatingStreamingProvider()
+
+    response = client.post("/query/stream", json={"question": "a real question", "top_k": 1})
+
+    events = _parse_sse(response.text)
+    done_event = next(e for e in events if e[0] == "done")
+    warnings = done_event[1]["citation_warnings"]
+    assert len(warnings) == 1
+    assert warnings[0]["source_number"] == 1
+
+
+def test_query_stream_emits_an_error_event_on_generation_failure(client):
+    class _FailingProvider:
+        def stream(self, system_prompt: str, user_prompt: str):
+            yield "partial "
+            raise RuntimeError("boom")
+
+    app.dependency_overrides[get_llm_provider] = lambda: _FailingProvider()
+
+    response = client.post("/query/stream", json={"question": "a real question"})
+
+    assert response.status_code == 200  # already committed by the time generation fails
+    events = _parse_sse(response.text)
+    assert events[-1][0] == "error"
+    assert not any(e[0] == "done" for e in events)
 
 
 def test_documents_groups_chunks_by_document_id(client):

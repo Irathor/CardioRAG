@@ -17,6 +17,7 @@ we don't fabricate support that doesn't exist yet.
 
 import logging
 import time
+from collections.abc import Iterator
 from typing import Protocol
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,14 @@ GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 class LLMProvider(Protocol):
     def generate(self, system_prompt: str, user_prompt: str) -> str: ...
+
+    def stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        """Yields the answer incrementally, for the streaming API endpoint
+        (project improvement round). Every concrete provider below
+        implements this - there's no partial/optional support here, same
+        principle as `generate()`: don't advertise a capability nothing
+        actually backs."""
+        ...
 
 
 class OpenAIProvider:
@@ -70,6 +79,22 @@ class OpenAIProvider:
         )
         return response.choices[0].message.content or ""
 
+    def stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        response = self._client.chat.completions.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+            stream=True,
+        )
+        for chunk in response:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+
 
 class HuggingFaceLocalProvider:
     """Runs a small instruction-tuned causal LM locally via `transformers` -
@@ -99,7 +124,7 @@ class HuggingFaceLocalProvider:
         self._device = resolved_device
         self.max_new_tokens = max_new_tokens
 
-    def generate(self, system_prompt: str, user_prompt: str) -> str:
+    def _build_inputs(self, system_prompt: str, user_prompt: str):
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -107,7 +132,10 @@ class HuggingFaceLocalProvider:
         prompt_text = self._tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
         )
-        inputs = self._tokenizer(prompt_text, return_tensors="pt").to(self._device)
+        return self._tokenizer(prompt_text, return_tensors="pt").to(self._device)
+
+    def generate(self, system_prompt: str, user_prompt: str) -> str:
+        inputs = self._build_inputs(system_prompt, user_prompt)
 
         with self._torch.no_grad():
             output_ids = self._model.generate(
@@ -125,6 +153,34 @@ class HuggingFaceLocalProvider:
         # not an echo of the prompt it was fed.
         new_tokens = output_ids[0][inputs["input_ids"].shape[1] :]
         return self._tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+
+    def stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        # Imported lazily, same reasoning as the constructor's imports.
+        from threading import Thread
+
+        from transformers import TextIteratorStreamer
+
+        inputs = self._build_inputs(system_prompt, user_prompt)
+        streamer = TextIteratorStreamer(
+            self._tokenizer, skip_prompt=True, skip_special_tokens=True
+        )
+        generation_kwargs = dict(
+            **inputs,
+            max_new_tokens=self.max_new_tokens,
+            do_sample=False,
+            pad_token_id=self._tokenizer.eos_token_id,
+            streamer=streamer,
+        )
+        # model.generate() blocks until the full answer is produced, so it
+        # has to run off the calling thread - otherwise nothing could be
+        # read from `streamer` until generation was already finished,
+        # defeating the entire point of streaming.
+        thread = Thread(target=self._model.generate, kwargs=generation_kwargs)
+        thread.start()
+        try:
+            yield from streamer
+        finally:
+            thread.join()
 
 
 class RetryingProvider:
@@ -169,6 +225,43 @@ class RetryingProvider:
                     self._max_retries,
                 )
                 time.sleep(delay)
+        raise RuntimeError("unreachable")  # loop always returns or raises
+
+    def stream(self, system_prompt: str, user_prompt: str) -> Iterator[str]:
+        try:
+            from openai import RateLimitError
+        except ImportError:
+
+            class RateLimitError(Exception):
+                pass
+
+        for attempt in range(self._max_retries + 1):
+            iterator = self._wrapped.stream(system_prompt, user_prompt)
+            try:
+                first_piece = next(iterator)
+            except StopIteration:
+                return  # an empty answer is a valid (if unhelpful) stream
+            except RateLimitError:
+                if attempt == self._max_retries:
+                    raise
+                delay = self._base_delay_seconds * (2**attempt)
+                logger.warning(
+                    "Rate limited before any output was streamed, retrying in %.1fs "
+                    "(attempt %d/%d)",
+                    delay,
+                    attempt + 1,
+                    self._max_retries,
+                )
+                time.sleep(delay)
+                continue
+
+            # A piece already reached the caller - from here on a
+            # RateLimitError propagates directly instead of retrying:
+            # restarting now would re-send already-streamed text, which a
+            # client reading it incrementally has no way to undo.
+            yield first_piece
+            yield from iterator
+            return
         raise RuntimeError("unreachable")  # loop always returns or raises
 
 

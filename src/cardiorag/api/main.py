@@ -7,12 +7,14 @@ out real clients or require background-job infrastructure that doesn't
 exist yet. The evaluation scripts remain the right interface for that.
 """
 
+import json
 import logging
 import time
 import uuid
+from collections.abc import Iterator
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from cardiorag.api.auth import require_api_key
 from cardiorag.api.dependencies import (
@@ -35,7 +37,7 @@ from cardiorag.api.schemas import (
 )
 from cardiorag.config import settings
 from cardiorag.generation.citations import find_fabricated_quotes
-from cardiorag.generation.generator import generate_answer
+from cardiorag.generation.generator import generate_answer, stream_answer
 from cardiorag.generation.providers import LLMProvider
 from cardiorag.models import RetrievedChunk
 from cardiorag.observability import configure_logging, reset_request_id, set_request_id
@@ -186,6 +188,76 @@ def query(
         latency_ms=latency_ms,
         citation_warnings=[CitationWarning(**f) for f in fabricated],
     )
+
+
+def _sse_event(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@app.post("/query/stream")
+def query_stream(
+    request: QueryRequest,
+    retriever: HybridRetriever = Depends(get_retriever),
+    reranker: Reranker = Depends(get_reranker),
+    provider: LLMProvider = Depends(get_llm_provider),
+    _rate_limit: None = Depends(enforce_rate_limit),
+    _auth: None = Depends(require_api_key),
+) -> StreamingResponse:
+    """Server-Sent Events variant of /query (project improvement round):
+    same retrieve -> rerank -> generate pipeline, but the answer is emitted
+    token-by-token as it's produced instead of waiting for the whole thing -
+    most noticeable with the local HuggingFace provider (Fix #7), where a
+    full answer can take 40-60s on CPU with nothing shown until it's done.
+
+    Retrieval and reranking happen before the StreamingResponse is
+    returned, same as /query, so a bad request (e.g. an empty question)
+    still gets a normal 400 rather than a 200 that then emits an error
+    event - by the time streaming starts, only generation can still fail.
+    """
+    start = time.perf_counter()
+    try:
+        candidates = retriever.retrieve(request.question, top_k=request.retrieve_k)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    rerank_result = reranker.rerank(request.question, candidates, top_k=request.top_k)
+    sources = [_to_source_info(r) for r in rerank_result.reranked]
+
+    def event_stream() -> Iterator[str]:
+        yield _sse_event("sources", {"sources": [s.model_dump() for s in sources]})
+
+        pieces: list[str] = []
+        try:
+            for piece in stream_answer(provider, request.question, rerank_result.reranked):
+                pieces.append(piece)
+                yield _sse_event("token", {"text": piece})
+        except Exception:
+            # The HTTP status line and "sources" event are already sent by
+            # this point - a mid-stream failure can only be communicated as
+            # an SSE event, never as an HTTP error status.
+            logger.exception("Streaming generation failed for question: %r", request.question)
+            yield _sse_event("error", {"detail": "The LLM provider failed to generate an answer."})
+            return
+
+        answer = "".join(pieces)
+        fabricated = find_fabricated_quotes(answer, rerank_result.reranked)
+        if fabricated:
+            logger.warning(
+                "Possible fabricated citation(s) in generated answer",
+                extra={"fabricated_quotes": fabricated, "question": request.question},
+            )
+
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        yield _sse_event(
+            "done",
+            {
+                "answer": answer,
+                "citation_warnings": [CitationWarning(**f).model_dump() for f in fabricated],
+                "latency_ms": latency_ms,
+            },
+        )
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.get("/documents", response_model=DocumentsResponse)

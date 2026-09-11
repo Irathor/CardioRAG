@@ -146,6 +146,22 @@ script or test run starts with an empty cache and gets no benefit, which is expe
 against the real embedding model: a repeated real query's second `embed()` call dropped from
 0.011s to 0.0s and returned bit-identical vectors, with zero calls into the underlying model.
 
+**Streaming responses — retry only before the first token, never mid-stream.** `LLMProvider` gained
+a `stream()` method alongside `generate()`, implemented for real by all three concrete providers
+(`OpenAIProvider` via the Chat Completions API's `stream=True`, `HuggingFaceLocalProvider` via
+`transformers.TextIteratorStreamer` running generation on a background thread). `RetryingProvider.
+stream()` deliberately only retries a rate limit hit *before* any piece has reached the caller —
+once output has started flowing to an HTTP client, retrying would re-send already-streamed text
+with no way for the client to undo it, so a failure past that point propagates instead (covered by
+a dedicated test, `test_retrying_provider_stream_does_not_retry_once_a_piece_was_already_yielded`).
+Verified against both real backends on the real corpus: the local provider (Fix #7) streamed a
+real answer over 45.9s total instead of blocking silently for that long, while Groq streamed the
+same kind of query in 1.4s — confirming streaming's UX value is concentrated almost entirely in
+the slow local-inference path, not the already-fast hosted one. One real, minor artifact observed
+with the local provider: `TextIteratorStreamer` occasionally emits empty-string `token` events
+(partial byte-level BPE tokens with nothing decodable yet) — harmless, but a client rendering
+tokens directly should skip empty ones rather than assume every `token` event carries visible text.
+
 ## Evaluation
 
 All numbers below come from `data/evaluation/retrieval_eval_results.csv`,
@@ -280,6 +296,7 @@ python scripts/evaluate_generation.py   # requires an LLM API key; makes real ca
 | `/health` | GET | none (always open) | Index status, chunk count, whether an LLM provider is configured |
 | `/retrieve` | POST | `X-API-Key` + rate limit | Hybrid (dense + BM25) retrieval only (no reranking, no generation) — for inspecting raw retrieval |
 | `/query` | POST | `X-API-Key` + rate limit | Full pipeline: retrieve → rerank → generate |
+| `/query/stream` | POST | `X-API-Key` + rate limit | Same pipeline as `/query`, emitted as Server-Sent Events instead of one blocking response |
 | `/documents` | GET | `X-API-Key` + rate limit | List of indexed documents, grouped from chunk metadata |
 
 Auth and rate limiting are both **opt-in**: with `API_KEY` unset (the default) they're disabled and
@@ -287,6 +304,14 @@ every endpoint behaves as before. Set `API_KEY` and, optionally, `RATE_LIMIT_PER
 60) in `.env` to require the header and cap requests per client IP — a missing/wrong key returns
 401, exceeding the budget returns 429. See Limitations for what this does and doesn't protect
 against.
+
+`POST /query/stream` emits three SSE event types, in order: one `sources` event (right after
+retrieval/reranking, before generation starts — the UI can show sources while the answer is still
+being written), any number of `token` events (`{"text": "..."}`, one per generated piece), and a
+final `done` event with the full assembled `answer`, `citation_warnings`, and `latency_ms` — or an
+`error` event instead of `done` if generation fails mid-stream (the HTTP status is already 200 by
+then; a request-level failure, like an empty question, still returns a normal 400/401/429 before
+any SSE event is sent, same as `/query`).
 
 No `/evaluate` endpoint: retrieval/generation evaluation is a long-running batch process over
 dozens of LLM calls (see the generation evaluation saga in git history — five model swaps and two
@@ -436,6 +461,14 @@ actually running the system against real data, not anticipated in advance.
 - A distributed rate-limit store (e.g. Redis), if the API ever runs as more than one replica —
   the current in-memory limiter is correct only for a single process.
 - CI/CD pipeline.
+- Wire the Streamlit UI up to `/query/stream` instead of blocking `/query` — the endpoint exists
+  and is tested, but the UI doesn't consume it yet, so the slow local-provider path (Fix #7) still
+  shows nothing until the full answer is ready in the UI specifically.
+- Cancel in-flight generation server-side when an SSE client disconnects mid-stream — right now
+  the local provider's background generation thread runs to completion regardless, wasting CPU on
+  an answer nobody will read.
+- SSE reconnection/resume support — a dropped connection mid-stream currently means starting the
+  whole question over, with no way to pick up from the last received token.
 
 ## License
 
