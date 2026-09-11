@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     # /query and /documents. Not applied to /health, which the Docker
     # Compose healthcheck polls every 10s with plain curl and no credentials.
     rate_limit_per_minute: int = 60
+    # "memory" (default): correct only within a single API process - if the
+    # API ever runs as more than one replica, each keeps its own counters
+    # and the effective limit multiplies by the replica count. "redis"
+    # shares one counter across every process pointed at the same Redis.
+    rate_limit_backend: Literal["memory", "redis"] = "memory"
+    redis_url: str = "redis://localhost:6379/0"
 
     # --- Logging ---
     log_level: str = "INFO"

@@ -247,6 +247,7 @@ docker compose build
 docker compose run --rm api python scripts/embed_corpus.py   # if indexes/ is empty
 docker compose run --rm api python scripts/build_index.py
 docker compose up -d              # api on :8000, ui on :8501
+docker compose --profile redis up -d   # optional: also starts redis, for RATE_LIMIT_BACKEND=redis
 ```
 Override host ports with `API_HOST_PORT`/`UI_HOST_PORT` if those are already taken. See the
 Docker section that follows for what was actually verified against a real build.
@@ -444,6 +445,18 @@ actually running the system against real data, not anticipated in advance.
   multiplying the effective limit); a real limitation for anything beyond a single instance.
   Verified against a real running server: a wrong `X-API-Key` still consumes rate-limit budget
   (closing a brute-force-the-key gap that would exist if auth were checked before throttling).
+- **Fixed**: `RATE_LIMIT_BACKEND=redis` swaps the per-process limiter for `RedisRateLimiter`
+  (`api/redis_rate_limiter.py`), sharing one counter across every API replica pointed at the same
+  `REDIS_URL` — same `INCR`-then-conditionally-`EXPIRE` recipe as the standard Redis rate-limiting
+  pattern, correct without a Lua script because `INCR` is atomic and only ever returns `1` to
+  exactly one caller per window. `memory` stays the default (nothing extra to run for local/single-
+  instance use); the optional `redis` service in `docker-compose.yml` only starts with
+  `docker compose --profile redis up`. Verified against a real Redis container two ways: (1) the
+  window genuinely expires and resets after `window_seconds`; (2) two independent real `uvicorn`
+  processes, alternating real HTTP requests to `/documents` with a shared limit of 3, correctly
+  cut off at the 4th request *combined* regardless of which process served it — while the same
+  alternating pattern against two independent in-memory `RateLimiter` instances let all 5 through,
+  reproducing the exact "effective limit multiplies by replica count" problem this fixes.
 - No CI/CD pipeline configured.
 - The Streamlit UI was verified to boot cleanly (server health checks, no tracebacks) but not
   interactively click-tested in a real browser — this environment has no browser automation tool.
@@ -458,8 +471,6 @@ actually running the system against real data, not anticipated in advance.
   SPECTER's off-the-shelf underperformance is measured rather than assumed away.
 - Figure/table extraction — currently text-only; a meaningful fraction of a CMR paper's evidence
   is in its figures.
-- A distributed rate-limit store (e.g. Redis), if the API ever runs as more than one replica —
-  the current in-memory limiter is correct only for a single process.
 - CI/CD pipeline.
 - Wire the Streamlit UI up to `/query/stream` instead of blocking `/query` — the endpoint exists
   and is tested, but the UI doesn't consume it yet, so the slow local-provider path (Fix #7) still

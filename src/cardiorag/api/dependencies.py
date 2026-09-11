@@ -16,6 +16,7 @@ from functools import lru_cache
 from fastapi import Depends, HTTPException, Request
 
 from cardiorag.api.rate_limit import RateLimiter
+from cardiorag.api.redis_rate_limiter import RedisRateLimiter
 from cardiorag.config import settings
 from cardiorag.embeddings.caching_embedder import CachingEmbedder
 from cardiorag.embeddings.embedder import Embedder
@@ -70,11 +71,23 @@ def get_reranker() -> Reranker:
 
 
 @lru_cache(maxsize=1)
-def get_rate_limiter() -> RateLimiter:
+def get_rate_limiter() -> RateLimiter | RedisRateLimiter:
+    if settings.rate_limit_backend == "redis":
+        # Imported lazily so a process that never sets RATE_LIMIT_BACKEND=redis
+        # never actually imports or connects to anything Redis-related, even
+        # though the package itself ships in the "api" extra unconditionally
+        # (same reasoning as huggingface_local reusing torch/transformers:
+        # switching backends via .env shouldn't require rebuilding the image).
+        import redis
+
+        client = redis.from_url(settings.redis_url)
+        return RedisRateLimiter(client, settings.rate_limit_per_minute)
     return RateLimiter(settings.rate_limit_per_minute)
 
 
-def enforce_rate_limit(request: Request, limiter: RateLimiter = Depends(get_rate_limiter)) -> None:
+def enforce_rate_limit(
+    request: Request, limiter: RateLimiter | RedisRateLimiter = Depends(get_rate_limiter)
+) -> None:
     client_id = request.client.host if request.client else "unknown"
     if not limiter.allow(client_id):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")

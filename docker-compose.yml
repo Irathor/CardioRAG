@@ -23,6 +23,18 @@ services:
       retries: 5
       start_period: 20s
 
+  # Optional (project improvement round): only started with
+  # `docker compose --profile redis up`, so the default `docker compose up`
+  # never pulls a Redis image nobody asked for. To actually use it, also
+  # set RATE_LIMIT_BACKEND=redis and REDIS_URL=redis://redis:6379/0 in .env
+  # - "redis" is this service's name on the Compose network, NOT the same
+  # "redis://localhost:6379/0" default that's correct outside Docker.
+  redis:
+    image: redis:7-alpine
+    profiles: ["redis"]
+    ports:
+      - "${REDIS_HOST_PORT:-6379}:6379"
+
   ui:
     build: .
     command:

@@ -46,10 +46,13 @@ ml = [
 llm = [
     "openai>=1.0",
 ]
-# Phase 15: REST API
+# Phase 15: REST API. redis is only needed when RATE_LIMIT_BACKEND=redis
+# (project improvement round) - the default in-memory limiter needs nothing
+# extra, so this stays lazily imported rather than a hard dependency.
 api = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
+    "redis>=5.0",
 ]
 # Phase 16: UI
 ui = [
