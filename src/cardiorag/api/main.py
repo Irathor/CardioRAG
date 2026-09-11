@@ -9,6 +9,7 @@ exist yet. The evaluation scripts remain the right interface for that.
 
 import logging
 import time
+import uuid
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -28,10 +29,12 @@ from cardiorag.config import settings
 from cardiorag.generation.generator import generate_answer
 from cardiorag.generation.providers import LLMProvider
 from cardiorag.models import RetrievedChunk
+from cardiorag.observability import configure_logging, reset_request_id, set_request_id
 from cardiorag.retrieval.reranker import Reranker
 from cardiorag.retrieval.retriever import Retriever
 from cardiorag.retrieval.vector_store import VectorStore
 
+configure_logging(settings.log_level)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -42,6 +45,40 @@ app = FastAPI(
     ),
     version="0.1.0",
 )
+
+
+@app.middleware("http")
+async def request_id_middleware(request: Request, call_next):
+    """Assigns one request id per incoming request (Phase 17): every log
+    emitted while handling it - including from retrieval/reranking/
+    generation modules deep in the call stack - is automatically stamped
+    with this id via observability.py's contextvar-backed logging filter,
+    without those modules needing to know a request is even happening.
+    """
+    request_id = str(uuid.uuid4())
+    token = set_request_id(request_id)
+    start = time.perf_counter()
+    try:
+        # Every exception type this app can raise has a registered handler
+        # (ValueError, NotImplementedError, HTTPException, and a catch-all
+        # Exception handler below), so call_next always returns a Response -
+        # Starlette resolves exception handlers underneath custom middleware,
+        # it doesn't let them propagate out here.
+        response = await call_next(request)
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        logger.info(
+            "request completed",
+            extra={
+                "http_method": request.method,
+                "http_path": request.url.path,
+                "status_code": response.status_code,
+                "latency_ms": latency_ms,
+            },
+        )
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        reset_request_id(token)
 
 
 def _to_source_info(retrieved: RetrievedChunk) -> SourceInfo:

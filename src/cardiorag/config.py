@@ -70,5 +70,17 @@ class Settings(BaseSettings):
     # --- Logging ---
     log_level: str = "INFO"
 
+    def masked(self) -> dict:
+        """Settings as a dict safe to log or print - never call `dict(settings)`
+        or `print(settings)` directly (Phase 17: never log secrets), since
+        api_key fields would appear in full. Presence is still shown (True/
+        False), since knowing *whether* a key is configured is useful for
+        debugging without ever exposing the key itself.
+        """
+        data = self.model_dump()
+        for key in ("openai_api_key", "groq_api_key"):
+            data[key] = bool(data[key])
+        return data
+
 
 settings = Settings()

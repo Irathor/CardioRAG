@@ -4,7 +4,20 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 16 — Streamlit UI (`app/streamlit_app.py`). Calls the FastAPI backend over HTTP
+**Status:** Phase 17 — observability. `src/cardiorag/observability.py` adds JSON-structured
+logging plus a per-request correlation id backed by a `contextvars.ContextVar`: a FastAPI
+middleware assigns one UUID per incoming request, and a logging `Filter` stamps it onto every
+`LogRecord` emitted while that request is being handled - including log calls deep in
+retrieval/embedding/generation modules that have no idea a request is even in flight, since
+Python's logging propagates up to the root logger's handlers. Verified against the real running
+server: a single `/retrieve` call produced a chain of log lines (including third-party `httpx`/
+`huggingface_hub` output) all sharing one `request_id`, while a concurrent 404 got its own -
+real request correlation, not just a design on paper. `Settings.masked()` returns the config
+with API keys reduced to `True`/`False` presence flags, so debugging never risks printing a
+real secret. No existing log statement had to be touched - they inherit structured formatting
+and request-id tagging for free once `configure_logging()` runs at API startup.
+
+Underneath, Phase 16 — Streamlit UI (`app/streamlit_app.py`). Calls the FastAPI backend over HTTP
 rather than re-implementing the pipeline in-process, so the embedding model/index/reranker load
 once in the API server, not once per Streamlit session, and the two processes run and scale
 independently. Includes: question input (with real example questions pulled live from the Phase

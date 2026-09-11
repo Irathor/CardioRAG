@@ -22,3 +22,13 @@ def test_settings_are_overridable_via_env(monkeypatch):
     settings = Settings(_env_file=None)
 
     assert settings.retrieval_top_k == 10
+
+
+def test_masked_settings_never_expose_real_api_key_values():
+    settings = Settings(_env_file=None, openai_api_key="sk-super-secret", groq_api_key=None)
+
+    masked = settings.masked()
+
+    assert masked["openai_api_key"] is True
+    assert masked["groq_api_key"] is False
+    assert "sk-super-secret" not in str(masked)
