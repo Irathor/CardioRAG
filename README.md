@@ -4,7 +4,27 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 17 — observability. `src/cardiorag/observability.py` adds JSON-structured
+**Status:** Phase 18 — integration testing. `tests/integration/` chains real modules across phase
+boundaries against a small synthetic two-document corpus (built fresh per test, not
+`data/corpus/`): PDF -> chunks (Phases 1-3 + the references-exclusion fix), chunks -> vector
+index (Phases 4-5, real embedding model), query -> ranked retrieval (Phase 6), and the full
+query -> grounded, cited answer path (Phases 1-10, with only the LLM provider faked so the test
+stays deterministic and needs no API key). 8 new tests (194 total).
+
+**Two real bugs the new tests caught immediately, both in the test fixture rather than production
+code - worth reporting exactly as found:**
+1. The synthetic-PDF helper used `page.insert_text()`, which draws from a point with no line
+   wrapping - a paragraph wider than the page silently clipped mid-word ("...delineating myo").
+   The clipped text then correctly propagated through cleaning and chunking exactly as extracted -
+   the pipeline behaved correctly on genuinely truncated input; the bug was in how the input was
+   generated. Fixed by switching to `page.insert_textbox()`, which wraps within a rectangle.
+2. A pipeline test asked for `final_k=2` sources from a corpus with only 2 chunks total (one per
+   document) and asserted both would be about cardiac MRI - impossible, since the second slot
+   always had to be the unrelated document. Fixed by requesting `final_k=1` and asserting
+   reranking correctly puts the relevant chunk first, which is what the test actually needed to
+   verify.
+
+Underneath, Phase 17 — observability. `src/cardiorag/observability.py` adds JSON-structured
 logging plus a per-request correlation id backed by a `contextvars.ContextVar`: a FastAPI
 middleware assigns one UUID per incoming request, and a logging `Filter` stamps it onto every
 `LogRecord` emitted while that request is being handled - including log calls deep in
