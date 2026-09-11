@@ -4,7 +4,26 @@ A production-style Retrieval-Augmented Generation (RAG) system specialized in sc
 literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
 to cardiovascular medicine.
 
-**Status:** Phase 15 — REST API. `src/cardiorag/api/` exposes the pipeline over FastAPI: `GET
+**Status:** Phase 16 — Streamlit UI (`app/streamlit_app.py`). Calls the FastAPI backend over HTTP
+rather than re-implementing the pipeline in-process, so the embedding model/index/reranker load
+once in the API server, not once per Streamlit session, and the two processes run and scale
+independently. Includes: question input (with real example questions pulled live from the Phase
+11 evaluation dataset, not invented sample text), the generated answer, and an expandable panel
+per source showing title, page(s), DOI, chunk ID, retrieval score, and the full retrieved
+excerpt - "make the RAG process inspectable" taken literally. Sidebar controls expose `top_k` and
+`retrieve_k` (real, wired pipeline parameters); a reranking on/off toggle was **not** added since
+the API doesn't currently support disabling it per-request - a fake control that did nothing
+would be worse than no control. A non-diagnostic disclaimer is shown unconditionally, not buried
+in a footer. Errors (API unreachable, timeout, 4xx/5xx) are caught and shown as a clear message,
+never a raw traceback.
+
+**Testing honesty**: verified the app boots cleanly against the real API (uvicorn + streamlit
+both started, health checks passed, root page returned 200, no tracebacks in the server log) -
+but this environment has no browser automation tool, so clicking through the actual UI (asking a
+question, expanding a source panel) was **not** verified interactively. That remains to be
+tried in a real browser.
+
+Underneath, Phase 15 — REST API. `src/cardiorag/api/` exposes the pipeline over FastAPI: `GET
 /health`, `POST /retrieve` (dense retrieval only), `POST /query` (retrieve -> rerank -> generate,
 matching the master spec's response shape), `GET /documents`. No `/evaluate` endpoint - retrieval/
 generation evaluation is a long batch process over dozens of LLM calls (see Phase 13's saga),

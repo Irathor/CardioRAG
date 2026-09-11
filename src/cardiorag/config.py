@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     # --- API ---
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    # Used by the Streamlit UI (Phase 16) to reach the API server - not the
+    # same value as api_host, which is what the server binds to (0.0.0.0
+    # isn't a valid address to connect *to* from a client).
+    api_base_url: str = "http://localhost:8000"
 
     # --- Logging ---
     log_level: str = "INFO"
