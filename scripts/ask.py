@@ -15,8 +15,8 @@ from cardiorag.config import settings
 from cardiorag.generation.citations import find_fabricated_quotes
 from cardiorag.generation.generator import generate_answer
 from cardiorag.generation.providers import load_provider_from_settings
+from cardiorag.retrieval.hybrid_retriever import load_hybrid_retriever
 from cardiorag.retrieval.reranker import Reranker, retrieve_and_rerank
-from cardiorag.retrieval.retriever import load_retriever
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -34,7 +34,9 @@ def main() -> None:
 
     provider = load_provider_from_settings(settings)  # raises early if misconfigured
 
-    retriever = load_retriever(Path(settings.index_dir), settings.embedding_model, device="cpu")
+    # Hybrid (dense + BM25) retrieval - measured to beat plain dense retrieval
+    # on every metric on the real evaluation set (see README Technical Decisions).
+    retriever = load_hybrid_retriever(Path(settings.index_dir), settings.embedding_model, device="cpu")
     reranker = Reranker(settings.reranker_model, device="cpu")
 
     rerank_result = retrieve_and_rerank(retriever, reranker, question, retrieve_k=20, final_k=5)

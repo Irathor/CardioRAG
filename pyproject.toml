@@ -32,11 +32,13 @@ ingestion = [
 tokenization = [
     "transformers>=4.42",
 ]
-# Phase 4-5: embeddings / vector index
+# Phase 4-5: embeddings / vector index. rank-bm25 is for the hybrid
+# lexical+dense retriever (Phase 20 fix #5) - lightweight, pure Python.
 ml = [
     "torch>=2.3",
     "sentence-transformers>=3.0",
     "faiss-cpu>=1.8",
+    "rank-bm25>=0.2",
 ]
 # Phase 8-9: grounded generation / LLM provider abstraction (OpenAI backend)
 llm = [

@@ -32,8 +32,8 @@ from cardiorag.generation.generator import generate_answer
 from cardiorag.generation.providers import LLMProvider
 from cardiorag.models import RetrievedChunk
 from cardiorag.observability import configure_logging, reset_request_id, set_request_id
+from cardiorag.retrieval.hybrid_retriever import HybridRetriever
 from cardiorag.retrieval.reranker import Reranker
-from cardiorag.retrieval.retriever import Retriever
 from cardiorag.retrieval.vector_store import VectorStore
 
 configure_logging(settings.log_level)
@@ -112,7 +112,7 @@ def health(vector_store: VectorStore = Depends(get_vector_store)) -> HealthRespo
 
 @app.post("/retrieve", response_model=RetrieveResponse)
 def retrieve(
-    request: RetrieveRequest, retriever: Retriever = Depends(get_retriever)
+    request: RetrieveRequest, retriever: HybridRetriever = Depends(get_retriever)
 ) -> RetrieveResponse:
     start = time.perf_counter()
     try:
@@ -131,7 +131,7 @@ def retrieve(
 @app.post("/query", response_model=QueryResponse)
 def query(
     request: QueryRequest,
-    retriever: Retriever = Depends(get_retriever),
+    retriever: HybridRetriever = Depends(get_retriever),
     reranker: Reranker = Depends(get_reranker),
     provider: LLMProvider = Depends(get_llm_provider),
 ) -> QueryResponse:

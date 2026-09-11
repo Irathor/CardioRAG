@@ -120,6 +120,19 @@ against all 8 real corpus papers with zero false positives despite four differen
 styles. Removed 45% of the previously-chunked content (724 → 395 chunks) and measurably improved
 every retrieval metric at the default config.
 
+**Hybrid retrieval (dense + BM25 via Reciprocal Rank Fusion) — now the default, not plain dense.**
+Dense embeddings dilute rare exact terms (an abbreviation, a specific method name); BM25 is a
+classic term-frequency retrieval algorithm that catches them directly. Measured on the real
+34-question set: hybrid beat dense-only on every metric (Hit Rate 0.82 → 0.94, MRR 0.60 → 0.72,
+nDCG 0.30 → 0.40). One real, non-obvious finding along the way: Reciprocal Rank Fusion's
+commonly-cited `k=60` (from the original paper, tuned for web-scale search over thousands of
+candidates) measurably **buried** a real single-source top match at this corpus's scale — a
+query for "MOCOnet" (a CNN named in exactly one paper) was correctly ranked #1 by BM25 alone,
+but vanished from the fused top-5 under `k=60` once ~20 generically-related candidates each
+ranked moderately in *both* lists collectively outscored it. `k=10` fixed it, verified against
+that exact real query. Lesson applied consistently with the rest of this project: a "standard"
+default is a starting point to measure at your own scale, not a value to trust unchecked.
+
 ## Evaluation
 
 All numbers below come from `data/evaluation/retrieval_eval_results.csv`,
@@ -143,9 +156,13 @@ from an earlier version of this table):**
 | top_k | k=20 | 0.91 | 0.50 | 0.11 | 0.53 | 0.38 |
 | Reranking | off | 0.71 | 0.47 | 0.18 | 0.22 | 0.26 |
 | Reranking | on (retrieve 20 → rerank 5) | 0.85 | 0.69 | 0.29 | 0.37 | 0.43 |
+| Retrieval mode | dense only | 0.82 | 0.60 | 0.25 | 0.19 | 0.30 |
+| Retrieval mode | **hybrid (dense + BM25, RRF k=10)** | **0.94** | **0.72** | **0.33** | **0.27** | **0.40** |
 
 (chunk_size/embedding_model/top_k/reranking rows other than the varied dimension use chunk_size=512,
-MiniLM, top_k=5, no reranking as the fixed baseline; see `scripts/evaluate_retrieval.py`.)
+MiniLM, top_k=5, no reranking as the fixed baseline; the retrieval-mode row uses chunk_size=256,
+MiniLM, top_k=5, no reranking. See `scripts/evaluate_retrieval.py` and `data/evaluation/experiments.jsonl`
+(EXP-015) for the hybrid comparison.)
 
 **Generation (Phase 13, real LLM calls via Groq):**
 
@@ -346,8 +363,10 @@ actually running the system against real data, not anticipated in advance.
   semantic judgment — a model refusing in genuinely novel wording will be missed.
 - Only `OpenAIProvider` (which also serves Groq) is implemented; `huggingface_local` and a native
   Ollama client raise `NotImplementedError` rather than fake support.
-- No hybrid lexical+dense retrieval — a rare exact-term query (an abbreviation, a specific dataset
-  name) relies entirely on the dense embedding capturing it.
+- **Fixed**: `retrieval/hybrid_retriever.py` combines dense retrieval with BM25 lexical search via
+  Reciprocal Rank Fusion, beating dense-only on every metric on the real evaluation set (see
+  Technical Decisions for the real `k=60` failure mode found and fixed along the way). Now the
+  API/scripts default rather than an opt-in alternative.
 
 **Scope / operations**
 - The corpus is 8 papers (395 chunks post-cleaning) — intentionally small for this project's

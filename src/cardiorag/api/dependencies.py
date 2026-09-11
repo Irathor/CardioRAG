@@ -16,8 +16,9 @@ from functools import lru_cache
 from cardiorag.config import settings
 from cardiorag.embeddings.embedder import Embedder
 from cardiorag.generation.providers import LLMProvider, RetryingProvider, load_provider_from_settings
+from cardiorag.retrieval.bm25_index import BM25Index
+from cardiorag.retrieval.hybrid_retriever import HybridRetriever
 from cardiorag.retrieval.reranker import Reranker
-from cardiorag.retrieval.retriever import Retriever
 from cardiorag.retrieval.vector_store import VectorStore
 
 
@@ -32,8 +33,18 @@ def get_embedder() -> Embedder:
 
 
 @lru_cache(maxsize=1)
-def get_retriever() -> Retriever:
-    return Retriever(get_embedder(), get_vector_store())
+def get_bm25_index() -> BM25Index:
+    return BM25Index(get_vector_store().chunks)
+
+
+@lru_cache(maxsize=1)
+def get_retriever() -> HybridRetriever:
+    """Hybrid (dense + BM25) retrieval, not plain dense - measured on the
+    real 34-question evaluation set to beat dense-only on every metric
+    (Hit Rate 0.82->0.94, MRR 0.60->0.72, nDCG 0.30->0.40), so it's the
+    default here rather than an opt-in alternative. See README Technical
+    Decisions."""
+    return HybridRetriever(get_embedder(), get_vector_store(), get_bm25_index())
 
 
 @lru_cache(maxsize=1)
