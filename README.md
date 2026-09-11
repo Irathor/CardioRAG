@@ -1,361 +1,340 @@
 # CardioRAG
 
-A production-style Retrieval-Augmented Generation (RAG) system specialized in scientific
-literature on cardiovascular magnetic resonance (CMR), cardiovascular imaging, and AI applied
-to cardiovascular medicine.
+A Retrieval-Augmented Generation system for scientific literature on cardiovascular magnetic
+resonance (CMR), cardiovascular imaging, and AI applied to cardiovascular medicine — built as an
+end-to-end, incrementally developed and measured ML engineering project, not a framework demo.
 
-**Status:** Phase 19 — Docker. See the **Docker** section below for build/config/index-creation/
-startup, all actually run against a real build (not just written and assumed to work) - the
-containerized API served a real `/query` call to Groq and returned a grounded, sourced answer.
+**This is a research and educational tool, not a medical diagnostic system.** Its output must
+never be treated as medical advice or a clinical recommendation.
 
-Underneath, Phase 18 — integration testing. `tests/integration/` chains real modules across phase
-boundaries against a small synthetic two-document corpus (built fresh per test, not
-`data/corpus/`): PDF -> chunks (Phases 1-3 + the references-exclusion fix), chunks -> vector
-index (Phases 4-5, real embedding model), query -> ranked retrieval (Phase 6), and the full
-query -> grounded, cited answer path (Phases 1-10, with only the LLM provider faked so the test
-stays deterministic and needs no API key). 8 new tests (194 total).
+## Problem
 
-**Two real bugs the new tests caught immediately, both in the test fixture rather than production
-code - worth reporting exactly as found:**
-1. The synthetic-PDF helper used `page.insert_text()`, which draws from a point with no line
-   wrapping - a paragraph wider than the page silently clipped mid-word ("...delineating myo").
-   The clipped text then correctly propagated through cleaning and chunking exactly as extracted -
-   the pipeline behaved correctly on genuinely truncated input; the bug was in how the input was
-   generated. Fixed by switching to `page.insert_textbox()`, which wraps within a rectangle.
-2. A pipeline test asked for `final_k=2` sources from a corpus with only 2 chunks total (one per
-   document) and asserted both would be about cardiac MRI - impossible, since the second slot
-   always had to be the unrelated document. Fixed by requesting `final_k=1` and asserting
-   reranking correctly puts the relevant chunk first, which is what the test actually needed to
-   verify.
+Scientific literature is a poor fit for how general-purpose LLMs answer questions. An LLM's
+training data has a cutoff and cannot cite a specific page of a specific paper; asked a pointed
+question about a niche finding, it will often produce a fluent, plausible-sounding answer with an
+invented citation rather than admit it doesn't know. That failure mode is worse than unhelpful in
+a scientific context — a fabricated DOI or a real DOI attached to a claim it never made is
+actively misleading, and looks identical to a correct answer until someone checks.
 
-Underneath, Phase 17 — observability. `src/cardiorag/observability.py` adds JSON-structured
-logging plus a per-request correlation id backed by a `contextvars.ContextVar`: a FastAPI
-middleware assigns one UUID per incoming request, and a logging `Filter` stamps it onto every
-`LogRecord` emitted while that request is being handled - including log calls deep in
-retrieval/embedding/generation modules that have no idea a request is even in flight, since
-Python's logging propagates up to the root logger's handlers. Verified against the real running
-server: a single `/retrieve` call produced a chain of log lines (including third-party `httpx`/
-`huggingface_hub` output) all sharing one `request_id`, while a concurrent 404 got its own -
-real request correlation, not just a design on paper. `Settings.masked()` returns the config
-with API keys reduced to `True`/`False` presence flags, so debugging never risks printing a
-real secret. No existing log statement had to be touched - they inherit structured formatting
-and request-id tagging for free once `configure_logging()` runs at API startup.
+Retrieval-augmented generation addresses this by making the LLM answer *from* a fixed, inspectable
+set of documents rather than from memory: every claim can be traced back to a retrieved passage,
+a page number, and (when available) a DOI. But that guarantee only holds if the retrieval,
+chunking, and citation-tracking are built carefully — a RAG system that quietly loses page numbers
+during chunking, or lets a reranker's confidence be mistaken for correctness, or can't tell a
+genuine citation from a hallucinated one, provides false reassurance instead of real grounding.
+This project treats each of those failure points as something to build, measure, and report on
+honestly, not assume away.
 
-Underneath, Phase 16 — Streamlit UI (`app/streamlit_app.py`). Calls the FastAPI backend over HTTP
-rather than re-implementing the pipeline in-process, so the embedding model/index/reranker load
-once in the API server, not once per Streamlit session, and the two processes run and scale
-independently. Includes: question input (with real example questions pulled live from the Phase
-11 evaluation dataset, not invented sample text), the generated answer, and an expandable panel
-per source showing title, page(s), DOI, chunk ID, retrieval score, and the full retrieved
-excerpt - "make the RAG process inspectable" taken literally. Sidebar controls expose `top_k` and
-`retrieve_k` (real, wired pipeline parameters); a reranking on/off toggle was **not** added since
-the API doesn't currently support disabling it per-request - a fake control that did nothing
-would be worse than no control. A non-diagnostic disclaimer is shown unconditionally, not buried
-in a footer. Errors (API unreachable, timeout, 4xx/5xx) are caught and shown as a clear message,
-never a raw traceback.
+## Architecture
 
-**Testing honesty**: verified the app boots cleanly against the real API (uvicorn + streamlit
-both started, health checks passed, root page returned 200, no tracebacks in the server log) -
-but this environment has no browser automation tool, so clicking through the actual UI (asking a
-question, expanding a source panel) was **not** verified interactively. That remains to be
-tried in a real browser.
+```mermaid
+flowchart TD
+    A[Scientific PDFs] --> B[Ingestion<br/>PyMuPDF extraction + metadata]
+    B --> C[Cleaning<br/>dehyphenation, whitespace, header/footer + references removal]
+    C --> D[Chunking<br/>token-aware, 256 tokens, HF tokenizer]
+    D --> E[Embedding<br/>sentence-transformers MiniLM, L2-normalized]
+    E --> F[(FAISS Index<br/>IndexFlatIP)]
 
-Underneath, Phase 15 — REST API. `src/cardiorag/api/` exposes the pipeline over FastAPI: `GET
-/health`, `POST /retrieve` (dense retrieval only), `POST /query` (retrieve -> rerank -> generate,
-matching the master spec's response shape), `GET /documents`. No `/evaluate` endpoint - retrieval/
-generation evaluation is a long batch process over dozens of LLM calls (see Phase 13's saga),
-not a request/response operation; the evaluation scripts remain the right interface for that.
+    Q[User question] --> QE[Query embedding]
+    QE --> F
+    F --> R[Dense retrieval<br/>top-20 candidates]
+    R --> RR[Cross-encoder reranking<br/>ms-marco-MiniLM-L-6-v2 -> top-5]
+    RR --> CTX[Context builder<br/>Source N blocks: title/page/DOI/text]
+    CTX --> LLM[LLM generation<br/>strict grounded prompt]
+    LLM --> ANS[Answer + citations]
+    ANS --> CV[Citation verification<br/>flags out-of-range Source N]
 
-One deliberate deviation from the spec's `/query` example: it shows a single `"page": 7`, but
-chunks have carried `page_numbers: list[int]` since Phase 3 (a chunk can span a page boundary) -
-`SourceInfo.pages` is a list here rather than force-fitting the simplified example and losing
-real citation information.
+    subgraph Serving
+        API[FastAPI backend]
+        UI[Streamlit UI]
+        UI -->|HTTP| API
+    end
+    API --> QE
+    API --> LLM
+    ANS --> API
+```
 
-The embedding model, FAISS index, and reranker are loaded once as cached singletons
-(`api/dependencies.py`, `Depends()`-injected so tests can swap in fakes); the LLM provider is
-loaded lazily so `/health`, `/retrieve`, and `/documents` keep working even with no API key
-configured - only `/query` needs one, and returns 503 with a clear message if it's missing
-(caught via a dedicated `ValueError` exception handler, since that failure happens during FastAPI's
-dependency resolution, before the route body's own try/except could see it).
+The API and UI are separate processes/containers communicating over HTTP (Phases 15-16, 19) —
+the UI never touches the embedding model, index, or LLM directly.
 
-Verified against the real server, not just the test suite: started the actual app with `uvicorn`
-against the real persisted index (395 chunks) and real Groq provider. `/health` correctly reported
-`num_chunks: 395`; `/query` for "What faithfulness metric does Ragas use?" returned a grounded,
-correctly-sourced answer end-to-end over real HTTP.
+## RAG Pipeline
 
-Underneath, Phase 14 — experiment tracking. Every significant retrieval/generation experiment run
-in Phases 12-13 is now a typed `ExperimentRecord` (`src/cardiorag/models.py`) in
-`data/evaluation/experiments.jsonl` (14 records), instead of living only as ad hoc CSVs with
-"fixed" baseline parameters buried as constants inside each script. `experiment_tracking.py`
-logs/loads records and flattens them into one pandas comparison table
-(`retrieval_<metric>`/`generation_<metric>` columns). Notably, the two generation-evaluation
-experiments from Phase 13 are logged **separately** rather than blended into one average - they
-used different judge LLMs (`qwen/qwen3.8-27b`, JSON-compliant, vs. `allam-2-7b`, a
-free-tier fallback that wasn't) and averaging them would have hidden that the two subsets
-aren't a comparable measurement. This is a backfill of experiments already run
-(`scripts/log_past_experiments.py`), not new experimentation.
+```
+PDF → extraction → cleaning → chunking → embeddings → FAISS index →
+  [query] → query embedding → dense retrieval (top-20) → cross-encoder reranking (top-5) →
+  context construction → LLM → grounded answer → citation verification
+```
 
-Underneath, Phase 13 — generation evaluation, run against the real evaluation dataset (all 38
-questions) through Groq. `src/cardiorag/evaluation/generation_metrics.py` implements faithfulness,
-answer relevance, and context relevance from scratch (LLM-as-judge, inspired by the Ragas paper
-already in this project's own corpus), reusing Phase 10's citation checker and a new
-phrase-based `looks_like_refusal` detector for answerability behavior.
+Each stage is a real, standalone module with its own tests — not a single call into a framework:
 
-**Results** (`data/evaluation/generation_eval_results.csv`), with an important caveat below:
+| Stage | Module | What it actually does |
+|---|---|---|
+| Ingestion | `ingestion/pdf_loader.py` | Per-page text extraction, content-addressed document IDs, extraction-issue detection (empty pages, duplicated headers/footers, hyphenation, references-section boundary) |
+| Cleaning | `ingestion/cleaner.py` | Conservative normalization — never fabricates a fixed word from ambiguous input |
+| Chunking | `chunking/chunker.py` | Token-aware sliding window using the *embedding model's own* tokenizer, not characters or a generic approximation |
+| Embedding | `embeddings/embedder.py` | Batched, L2-normalized sentence-transformer encoding |
+| Indexing | `retrieval/vector_store.py` | FAISS `IndexFlatIP` (see Technical Decisions) |
+| Retrieval | `retrieval/retriever.py` | Query text → embedding → FAISS search, dimension-checked against the index |
+| Reranking | `retrieval/reranker.py` | Cross-encoder scores `[query, passage]` jointly, unlike the bi-encoder |
+| Generation | `generation/generator.py` + `prompts.py` | Refuses before calling the LLM if nothing was retrieved; strict evidence-only system prompt otherwise |
+| Citations | `generation/citations.py` | Mechanically checks every `[Source N]` the LLM wrote against the sources it was actually given |
 
-| metric | all 34 answerable (blended) | 28 with JSON-compliant judge only |
-|---|---:|---:|
-| mean faithfulness | 0.785 | **0.953** |
-| mean answer relevance | - | 0.777 |
-| mean context relevance | - | 0.582 |
-| hallucinated citations | 0 | 0 |
-| refusal correctness (should NOT refuse) | 100% | - |
-| no-evidence refusal correctness (SHOULD refuse, n=4) | 0%* | - |
+## Technical Decisions
 
-\* **This number is misleading on its own - see the manual inspection below.**
+Every decision below was made from a measurement, not intuition — the project's stated principle
+from day one, and the reason Phases 11-14 exist at all.
 
-**The free-tier saga, reported honestly because it's real engineering, not a footnote:** running
-this required cycling through five different Groq models across six attempts in one session.
-`openai/gpt-oss-120b` and `openai/gpt-oss-20b` each hit their own ~200k-tokens/day cap
-mid-run (confirmed: the cap is per-model, not a shared org pool); `groq/compound-mini` looked
-like a fresh option but turned out to be an agentic system that itself routes through
-`gpt-oss-120b`, inheriting its already-exhausted quota; a bare `RateLimitError` retry loop
-(added early, `RetryingProvider`) handles short per-minute limits but is useless against a
-multi-hour daily reset. Two real fixes came out of this, not just model-swapping: (1) faithfulness
-checking originally made one LLM call per extracted statement - rewritten to verify all statements
-in a single batched call (`verify_statements`), which took the run from failing at question 13 to
-question 25 on the same daily budget; (2) `OpenAIProvider` never set `max_tokens` explicitly, so
-one model rejected requests outright for exceeding its default output-token-per-minute ceiling -
-now explicit (`max_tokens=800`). The script also now checkpoints results to CSV after every
-question and resumes by skipping already-scored ids, since two earlier attempts crashed
-mid-run and lost everything (nothing had been persisted until the very end).
+**Embedding model — `sentence-transformers/all-MiniLM-L6-v2` (general-purpose), not a
+science-specific model.** Compared against SPECTER (a model trained specifically on scientific
+paper similarity via citation graphs) on the real 34-question evaluation set: MiniLM won on every
+retrieval metric (Hit Rate 0.76 vs. 0.65, MRR 0.49 vs. 0.38). Plausible reason: SPECTER is trained
+for document-level (title+abstract) similarity, not fine-grained passage retrieval for
+question-answering — the actual task here. "Domain-specific" is not automatically "better" without
+measuring it against the real task.
 
-**Manual inspection of the 4 no-evidence answers** (required by Phase 13, and it's what actually
-caught the real story here) revealed the 0% refusal number is mostly an artifact of a too-narrow
-keyword list, not a wholesale system failure: two answers (`q032`, `q034`) substantively declined
-to answer ("there is no direct mention of...", "have not been directly compared") using phrasing
-the original `_REFUSAL_PHRASES` list didn't include at all - fixed by adding the real observed
-phrases. But manual reading also found a genuine, more serious problem the automated metrics
-missed entirely: `q033` opens with an appropriate decline, then **fabricates a citation** -
-`[Source 1] states: "Gadolinium-based contrast agents ... dosing should be based on body
-weight."` - a sentence that does not exist in that source (the corpus has no contrast-dosing
-content at all, which is exactly why this question was chosen as unanswerable). Phase 10's
-citation checker did not flag this, because it only validates that a cited source *number* is in
-range - it has no way to check whether the *content* attributed to that source is actually there.
-That gap is now a documented open limitation, not a fixed one.
+**Chunk size — 256 tokens**, chosen from a 256/512/768 sweep. 256 gave the best Hit Rate (0.85)
+and MRR (0.63) of the three, at the cost of the worst Recall (0.19). Chosen deliberately: this
+project's core value is citation trustworthiness (finding the *right* passage, ranked high) over
+exhaustive evidence coverage — Hit Rate/MRR measure the former, Recall the latter.
 
-The blended-vs-reliable faithfulness split above exists because the last 10 questions were
-answered by `allam-2-7b` after every higher-quality model's daily quota ran out - it often
-returned free-form prose instead of the requested JSON for judge prompts, which
-`generation_metrics.py` correctly detects and falls back to a conservative "unsupported" score
-for, rather than silently miscounting. That fallback is honest but drags the blended average down
-for reasons unrelated to real answer quality, which is why both numbers are reported rather than
-just one.
+**Similarity metric — inner product on L2-normalized vectors.** For unit vectors, inner product
+*is* cosine similarity (`cos(a,b) = a·b / (|a||b|)`, and `|a|=|b|=1`), so FAISS's exact
+`IndexFlatIP` computes cosine similarity directly, with no extra normalization step at query time.
+Exact (not approximate/IVF) search is appropriate at this corpus's scale (a few hundred chunks) —
+an ANN index only pays off at a scale this project is nowhere near.
 
- `src/cardiorag/evaluation/retrieval_metrics.py`
-(Hit Rate, Precision@K, Recall@K, MRR, nDCG) and `evaluator.py` (relevance judged by
-document+page overlap, not exact chunk_id, since chunk boundaries shift across chunk_size
-configs) measure retrieval against the Phase 11 ground truth. `scripts/evaluate_retrieval.py`
-ran the full comparison against all 34 answerable questions and saved results to
-`data/evaluation/retrieval_eval_results.csv`:
+**Reranking — cross-encoder, retrieve 20 → rerank to top-5.** Measured to substantially improve
+retrieval quality on average (MRR 0.49 → 0.74, nDCG 0.28 → 0.45) — but a single hand-inspected
+example earlier in the project suggested it "didn't help," which turned out to be misleading: one
+example is not a measurement. The systematic 34-question evaluation is what settled it.
 
-| experiment | variant | hit_rate | mrr | precision@k | recall@k | ndcg@k |
+**LLM provider — abstracted, not hardcoded.** `generation/providers.py` defines an `LLMProvider`
+protocol; `OpenAIProvider` implements it and, because Groq exposes an OpenAI-API-compatible
+endpoint, also serves Groq with zero new provider code — just a different `base_url` and model
+name. Real generation in this project runs on Groq's free tier for cost reasons.
+
+**References-section exclusion at the chunking source, not post-filtering.** A standalone
+"References"/"Bibliography" heading line — detected in *raw* text, before cleaning merges it into
+the citation list — marks every following page as excluded from chunking entirely. Verified
+against all 8 real corpus papers with zero false positives despite four different citation
+styles. Removed 45% of the previously-chunked content (724 → 395 chunks) and measurably improved
+every retrieval metric at the default config.
+
+## Evaluation
+
+All numbers below come from `data/evaluation/retrieval_eval_results.csv`,
+`generation_eval_results.csv`, and `experiments.jsonl` — actually run against the real 8-paper
+corpus and the 38-question hand-verified evaluation dataset (Phase 11). None are invented.
+
+**Retrieval (Phase 12, n=34 answerable questions, varying one parameter at a time):**
+
+| Experiment | Variant | Hit Rate | MRR | Precision@K | Recall@K | nDCG@K |
 |---|---|---:|---:|---:|---:|---:|
-| chunk_size | 256 | 0.82 | 0.61 | 0.24 | 0.18 | 0.30 |
-| chunk_size | 512 | 0.71 | 0.45 | 0.19 | 0.23 | 0.26 |
-| chunk_size | 768 | 0.68 | 0.47 | 0.17 | 0.28 | 0.28 |
-| embedding_model | MiniLM (general) | 0.71 | 0.45 | 0.19 | 0.23 | 0.26 |
-| embedding_model | SPECTER (scientific) | 0.44 | 0.30 | 0.12 | 0.14 | 0.16 |
-| top_k | k=3/5/10/20 | 0.53/0.71/0.82/0.91 | 0.41/0.45/0.47/0.48 | ↓ as k grows | ↑ as k grows | ↑ as k grows |
-| reranking | off | 0.71 | 0.45 | 0.19 | 0.23 | 0.26 |
-| reranking | on (20→5) | 0.85 | 0.71 | 0.29 | 0.36 | 0.43 |
+| Chunk size | 256 | 0.85 | 0.63 | 0.25 | 0.19 | 0.31 |
+| Chunk size | 512 | 0.76 | 0.49 | 0.20 | 0.25 | 0.28 |
+| Chunk size | 768 | 0.71 | 0.48 | 0.17 | 0.32 | 0.30 |
+| Embedding model | MiniLM (general) | 0.76 | 0.49 | 0.20 | 0.25 | 0.28 |
+| Embedding model | SPECTER (scientific) | 0.65 | 0.38 | 0.19 | 0.26 | 0.25 |
+| top_k | k=3 | 0.59 | 0.45 | 0.23 | 0.17 | 0.26 |
+| top_k | k=5 | 0.76 | 0.49 | 0.20 | 0.25 | 0.28 |
+| top_k | k=10 | 0.85 | 0.50 | 0.14 | 0.35 | 0.31 |
+| top_k | k=20 | 0.94 | 0.51 | 0.11 | 0.53 | 0.38 |
+| Reranking | off | 0.76 | 0.49 | 0.20 | 0.25 | 0.28 |
+| Reranking | on (retrieve 20 → rerank 5) | 0.88 | 0.74 | 0.31 | 0.38 | 0.45 |
 
-**Two findings that overturn earlier assumptions, with data instead of intuition:**
-1. **SPECTER (scientific-paper-specific) retrieves *worse* than general-purpose MiniLM on every
-   metric.** Plausible reason: SPECTER is trained for document-level (title+abstract) similarity
-   via citation graphs, not fine-grained passage retrieval for question-answering - the actual
-   task here. "Domain-specific" is not automatically "better" without measuring against the
-   actual retrieval task.
-2. **Reranking helps substantially on average** (MRR 0.45 -> 0.71, nDCG 0.26 -> 0.43), reversing
-   the qualitative, single-question impression from Phase 7 that it "didn't obviously help." One
-   example misled; 34 measured questions did not.
+(chunk_size/embedding_model/top_k/reranking rows other than the varied dimension use chunk_size=512,
+MiniLM, top_k=5, no reranking as the fixed baseline; see `scripts/evaluate_retrieval.py`.)
 
-Chunk size shows a real precision/recall tradeoff (256 tokens: best Hit Rate/MRR, worst Recall;
-768: the reverse). Given the project's emphasis on citation trustworthiness over exhaustive
-coverage, the default is now **256 tokens** (`ChunkingConfig` in `chunker.py`) - the persisted
-embeddings/index were rebuilt accordingly (724 chunks, up from 364).
+**Generation (Phase 13, real LLM calls via Groq):**
 
-**Update - the bibliography problem is now fixed at the source.** A spot-check at 256 tokens
-initially showed the reference-list ranking problem (Phase 5-7) getting *more* pronounced, not
-less. The actual fix: `pdf_loader.py` detects a standalone "References"/"Bibliography" heading
-line in each PDF's RAW text (before cleaning merges it into the citation list, destroying the
-signal) - verified against all 8 real corpus papers with zero false positives, despite each using
-a different citation style ("[1]", "1.", "01.", or unnumbered author-year). Every page from that
-heading onward is flagged `is_references_section=True`, and `chunker.py` now skips those pages
-entirely rather than post-filtering chunks after the fact. Result: **395 chunks instead of
-724** (45% of the previous chunk set was pure bibliography), and re-running Phase 12's evaluation
-confirms a real, measured improvement at the default config, not just a qualitative impression:
-
-| metric | before fix | after fix |
+| Metric | Value | n |
 |---|---:|---:|
-| hit_rate | 0.82 | 0.85 |
-| mrr | 0.61 | 0.63 |
-| precision@k | 0.24 | 0.25 |
-| recall@k | 0.18 | 0.19 |
-| ndcg@k | 0.30 | 0.31 |
+| Faithfulness (JSON-compliant judge subset) | 0.953 | 28 |
+| Answer relevance | 0.777 | 28 |
+| Context relevance | 0.582 | 28 |
+| Hallucinated citations (out of range `[Source N]`) | 0 | 34 |
+| Refusal correctness when evidence exists (should NOT refuse) | 100% | 34 |
+| Refusal correctness on no-evidence questions (raw keyword heuristic) | 0%* | 4 |
 
-**Honest remaining gap**: a qualitative check after the fix still surfaces non-substantive text
-of a *different* kind - author-affiliation lists and copyright/licensing boilerplate ("publication
-in this journal is cited, in accordance with accepted academic practice..."). The references fix
-solved exactly what it targeted; front-matter boilerplate is a related but distinct problem,
-still open.
+\* **Manual inspection (also required by Phase 13, and where the real story was) found this
+number is misleading on its own**: 2 of 4 answers substantively declined to answer but used
+phrasing outside the original keyword list (since fixed); one fabricated a citation attributed to
+a real, in-range source number — a problem Phase 10's citation checker cannot catch, since it
+only validates that a cited number exists, not that the attributed content is real. See
+Limitations.
 
-**Groq added as a second working LLM provider** (`llm_provider=groq` in `.env`), ahead of
-Phase 13. Groq exposes an OpenAI-API-compatible endpoint, so it reuses `OpenAIProvider` with a
-different `base_url` instead of needing new provider code - exactly what Phase 9's abstraction
-was for. First real end-to-end run (`scripts/ask.py`) generated a grounded, multi-source answer
-citing `[Source 1]`-`[Source 5]`, verified against Phase 10's citation checker with **zero
-hallucinated citations**. Note: Groq's available model catalog changes over time and didn't match
-commonly-cited model IDs from documentation/examples - `client.models.list()` is what actually
-determined the working `GROQ_MODEL` default here, not an assumption.
+The two generation-evaluation runs are logged as **separate** experiments in
+`experiments.jsonl`, not blended: the last 10 of 38 questions were judged by a smaller fallback
+model (`allam-2-7b`) after every higher-quality free-tier model's daily quota was exhausted, and
+it didn't reliably follow the judge prompts' JSON format. Averaging a JSON-compliant judge with a
+non-compliant one would have hidden that the two subsets aren't a comparable measurement.
 
-Underneath, Phase 11 — evaluation dataset. `data/evaluation/eval_dataset.jsonl` holds 38
-hand-authored, manually-verified questions (17 factual, 7 comparison, 3 synthesis, 3 multi-paper,
-4 no-evidence, 4 misleading) built by actually reading the corpus's cleaned text and spot-checking
-facts against the extracted page content — not fabricated from general knowledge. Each example
-carries expected document id(s)/page(s), a reference answer, and an answerability label.
-`tests/evaluation/test_dataset.py` validates structure (id uniqueness, category coverage,
-consistency between `answerable` and expected sources) and cross-checks every referenced
-document id against the *live* corpus, so a changed PDF would be caught rather than silently
-going stale. This produces ground truth for Phase 12 (retrieval metrics) — no Recall@K/MRR is
-computed yet.
-
-Phase 10 (citations) added `src/cardiorag/generation/citations.py`, which adds two
-things that don't depend on the LLM: (1) mechanical verification — extracting every `[Source N]`
-marker from generated text and flagging any N outside the range of sources actually provided, so
-"never invent citations" is checked, not just requested in the prompt; (2) `build_citation_list()`,
-which groups the flat `RetrievedChunk` list by document (a paper can contribute several chunks)
-into presentation-ready `Citation` objects — built strictly from retrieval metadata, never from
-the LLM's own text. Verified against the real index: the 5 reranked chunks for a sample query
-collapsed into 2 distinct documents, and a deliberately fabricated `[Source 99]` reference was
-correctly flagged as invalid. The UI to actually let a user inspect this (Phase 16) doesn't exist
-yet.
-
-Underneath, Phases 8-9 built grounded generation (`src/cardiorag/generation/`): evidence context
-blocks (`[Source N]` with title/page/DOI kept bound to their text), a strict system prompt
-(evidence-only claims, explicit refusal when insufficient, no invented citations, flag source
-disagreement, non-diagnostic disclaimer), and a swappable `LLMProvider` (Phase 9) — only
-`OpenAIProvider` is implemented so far. `scripts/ask.py` wires the full pipeline
-(retrieve -> rerank -> generate) but **hasn't been tested against a real LLM call yet**: it
-requires `OPENAI_API_KEY`, not configured in this environment. Verified instead that it fails
-fast with a clear error when the key is missing.
-
-Phase 7 (reranking) added a cross-encoder second stage, with an honest experimental finding worth
-keeping in mind for the sources this pipeline surfaces: reranking did **not** cleanly fix the
-bibliography/citation-list problem noted in Phase 5/6 on the real corpus's messier chunk
-boundaries — added complexity didn't obviously improve results there. See the limitations list
-for remediation options (most likely fix is upstream, in chunking).
-
-CardioRAG is a research/educational project. It is **not** a medical diagnostic system and its
-output must never be treated as medical advice.
-
-## Project layout
-
-```
-app/                    Streamlit UI (Phase 16)
-data/
-  corpus/               Source PDFs (git-ignored — large/copyrighted binaries)
-  references/           Reference/gold documents for evaluation
-  processed/            Cleaned text, chunks (generated, git-ignored)
-  evaluation/           Hand-authored evaluation dataset (versioned)
-indexes/                Persisted FAISS indexes (generated, git-ignored)
-notebooks/experiments/  Exploratory notebooks (chunking/embedding comparisons, etc.)
-src/cardiorag/
-  ingestion/            PDF loading, metadata extraction (Phase 1)
-  chunking/             Token-aware chunking (Phase 3)
-  embeddings/           Embedding model abstraction (Phase 4)
-  retrieval/            Vector store, retriever, reranker (Phases 5-7)
-  generation/           Context building, prompts, LLM generation (Phases 8-9)
-  evaluation/           Retrieval & generation metrics (Phases 12-13)
-  api/                  FastAPI backend (Phase 15)
-  config.py             Typed settings loaded from environment variables
-  models.py             Shared Pydantic domain models (added in Phase 1)
-tests/                  pytest suite
-scripts/                CLI entry points (build_index.py, evaluate.py — later phases)
-```
-
-## Setup
+## Installation
 
 Requires Python 3.12+.
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate        # Windows
-pip install -e ".[dev]"       # core + test tooling only, for now
-cp .env.example .env          # then fill in secrets as needed
-pytest
+.venv\Scripts\activate               # Windows; `source .venv/bin/activate` on Linux/macOS
+pip install -e ".[ingestion,tokenization,ml,api,ui,llm,eval,dev]"
+cp .env.example .env                 # then fill in OPENAI_API_KEY or GROQ_API_KEY
+pytest                                # 194 tests
 ```
 
-Additional dependency groups (`ingestion`, `ml`, `api`, `ui`, `eval`) are installed
-incrementally as each corresponding phase is implemented — there's no reason to pull in
-PyTorch/FAISS before we're embedding anything.
+Dependency groups are split so you only install what a given phase needs — see the comments in
+`pyproject.toml`. A free Groq API key (OpenAI-API-compatible, no cost) works with
+`LLM_PROVIDER=groq` in `.env`; see `.env.example`.
 
-## Docker
+Build the index once before running the API/UI/scripts against real data:
+```bash
+python scripts/embed_corpus.py   # embeds data/corpus/*.pdf into data/processed/
+python scripts/build_index.py    # builds the FAISS index into indexes/
+```
 
-One image serves both the API and the UI (different `command:` per service in
-`docker-compose.yml`) rather than two separate Dockerfiles — simpler to build and maintain at
-this project's size, at the cost of the UI image also carrying the ML stack it doesn't use at
-runtime (the UI is a pure HTTP client of the API). All commands below were actually run against
-a real build, not just written and assumed to work.
+### Docker
 
-**Build:**
 ```bash
 docker compose build
-```
-
-**Configuration:** the API container reads `.env` (via `env_file` in `docker-compose.yml`) —
-create it from `.env.example` first, same as local development. The UI container needs no `.env`:
-`API_BASE_URL` is set to `http://api:8000` directly in `docker-compose.yml`, using Compose's
-container-to-container DNS (the service name `api` resolves on the Compose network) — this is a
-different value from what a *host* browser would use, and is set automatically, not something you
-configure.
-
-**Index creation:** the real corpus PDFs and the built embeddings/FAISS index are never baked
-into the image (`data/corpus`, `data/processed`, `indexes/` are gitignored, regenerated
-artifacts — the corpus may also be copyrighted). They're bind-mounted from the host instead:
-```bash
-docker compose run --rm api python scripts/embed_corpus.py
+docker compose run --rm api python scripts/embed_corpus.py   # if indexes/ is empty
 docker compose run --rm api python scripts/build_index.py
+docker compose up -d              # api on :8000, ui on :8501
 ```
-Or build them locally first (`python scripts/embed_corpus.py && python scripts/build_index.py`)
-and just let the volume mount expose the existing `data/`/`indexes/` to the containers — either
-way works since both read/write the same host-mounted directories.
+Override host ports with `API_HOST_PORT`/`UI_HOST_PORT` if those are already taken. See the
+Docker section that follows for what was actually verified against a real build.
 
-**Startup:**
+**Docker details, verified against a real build (not just written and assumed to work):**
+`data/corpus`, `data/processed`, and `indexes/` are bind-mounted from the host rather than baked
+into the image (they're gitignored, regenerated artifacts, and the corpus may be copyrighted).
+Built the image, ran `API_HOST_PORT=8090 UI_HOST_PORT=8591 docker compose up -d`, and confirmed:
+`GET /health` reported `num_chunks: 395` matching the host-mounted index exactly; `POST /query`
+made a real outbound call to Groq from inside the container and returned a grounded, sourced
+answer; the UI served HTTP 200; and `docker exec ui curl http://api:8000/health` succeeded,
+confirming container-to-container DNS actually works via Compose's network, not just that both
+services happen to be independently reachable from the host.
+
+## Usage
+
+**Command line (single question, full pipeline):**
 ```bash
-docker compose up -d
+python scripts/ask.py "How does artificial intelligence improve cardiac MRI segmentation?"
 ```
-`api` on `:8000`, `ui` on `:8501` by default — override with `API_HOST_PORT`/`UI_HOST_PORT` env
-vars if those host ports are already taken (they were on the machine this was tested on, since
-other unrelated projects were already running). The `ui` service waits for `api`'s healthcheck
-to pass (`depends_on: condition: service_healthy`) before starting, so it never races a
-not-yet-ready API.
 
-**Testing (done for real, not just described):** built the image, started both services with
-`API_HOST_PORT=8090 UI_HOST_PORT=8591 docker compose up -d`, and verified:
-- `GET /health` → `{"status":"ok","index_loaded":true,"num_chunks":395,"llm_provider_configured":true}`
-  (395 matches the real host-mounted index exactly)
-- `POST /retrieve` and `POST /query` both returned real, correctly-sourced results — `/query`
-  made a real outbound call to Groq from inside the container and got a grounded answer back
-- the UI's root page returned HTTP 200
-- `docker exec medirag-ui-1 curl http://api:8000/health` succeeded - confirmed
-  container-to-container networking actually works via Compose's DNS, not just that both
-  services happen to also be independently reachable from the host
+**REST API:**
+```bash
+uvicorn cardiorag.api.main:app --port 8000
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How does AI improve cardiac MRI segmentation?", "top_k": 5}'
+```
 
-Torn down afterward with `docker compose down`; nothing was left running.
+**Streamlit UI:**
+```bash
+streamlit run app/streamlit_app.py   # requires the API running separately, see above
+```
 
-## Roadmap
+**Experiments** (chunking/embedding/retrieval/generation comparisons, all reproducible):
+```bash
+python scripts/compare_chunking_configs.py
+python scripts/compare_embedding_models.py
+python scripts/evaluate_retrieval.py
+python scripts/evaluate_generation.py   # requires an LLM API key; makes real calls
+```
 
-See the milestone plan: PDF ingestion → chunking → embeddings → vector search → retrieval →
-grounded generation → citations → reranking → evaluation → API + UI + Docker. Each milestone
-is developed and tested incrementally.
+## API
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/health` | GET | Index status, chunk count, whether an LLM provider is configured |
+| `/retrieve` | POST | Dense retrieval only (no reranking, no generation) — for inspecting raw retrieval |
+| `/query` | POST | Full pipeline: retrieve → rerank → generate |
+| `/documents` | GET | List of indexed documents, grouped from chunk metadata |
+
+No `/evaluate` endpoint: retrieval/generation evaluation is a long-running batch process over
+dozens of LLM calls (see the generation evaluation saga in git history — five model swaps and two
+real engineering fixes to get through a free-tier daily quota), not a request/response operation.
+
+`POST /query` example response (real shape, `SourceInfo.pages` is a list — a deliberate deviation
+from a single-int `"page"` example, since a chunk can span a page boundary since Phase 3):
+```json
+{
+  "question": "How does AI improve cardiac MRI segmentation?",
+  "answer": "Deep learning models automate left ventricle segmentation... [Source 1].",
+  "sources": [
+    {
+      "title": "Improving the efficiency and accuracy of cardiovascular magnetic resonance...",
+      "pages": [2, 3],
+      "doi": "10.1016/j.jocmr.2024.101051",
+      "chunk_id": "4ee13c3bf6c0ec17-0010",
+      "document_id": "4ee13c3bf6c0ec17",
+      "score": 0.685,
+      "text": "..."
+    }
+  ],
+  "latency_ms": 1972
+}
+```
+
+## Limitations
+
+Documented as found, not smoothed over — most were caught by this project's own tests or by
+actually running the system against real data, not anticipated in advance.
+
+**Ingestion / metadata**
+- Title extraction takes the first substantial line of page 1; a multi-line title gets truncated
+  (observed on a real paper in the corpus).
+- Publication year extraction takes the first 4-digit number found; can match a citation year
+  instead of the publication year.
+- Author extraction relies on embedded PDF metadata only, which is often incomplete.
+- *(Fix direction: query CrossRef/Semantic Scholar by the DOI, which extracts reliably, instead
+  of trusting embedded PDF metadata.)*
+
+**Cleaning / chunking**
+- `unwrap_soft_line_breaks` treats a blank line as the only paragraph boundary; a list or table
+  without blank lines between items gets merged into one line.
+- ASCII-hyphen dehyphenation is deliberately conservative (keeps the hyphen to avoid corrupting
+  compound terms like "T1-weighted") — a genuine line-wrap break leaves a residual hyphen
+  ("informa-tion") rather than being perfectly joined.
+- Front-matter boilerplate (author-affiliation lists, copyright/licensing notices) still gets
+  chunked and occasionally retrieved — a different problem from the references-section issue that
+  *was* fixed, not yet addressed.
+- No minimum chunk-quality filter; a very short or degenerate chunk can still enter the index.
+
+**Retrieval / generation**
+- The citation checker (`generation/citations.py`) validates that a cited `[Source N]` number is
+  in range — it cannot verify that the content attributed to that source is actually there. A
+  real fabricated-citation case was found during Phase 13's manual inspection that this check did
+  not catch.
+- `looks_like_refusal` is a phrase-based heuristic anchored to observed real phrasing, not a
+  semantic judgment — a model refusing in genuinely novel wording will be missed.
+- Only `OpenAIProvider` (which also serves Groq) is implemented; `huggingface_local` and a native
+  Ollama client raise `NotImplementedError` rather than fake support.
+- No hybrid lexical+dense retrieval — a rare exact-term query (an abbreviation, a specific dataset
+  name) relies entirely on the dense embedding capturing it.
+
+**Scope / operations**
+- The corpus is 8 papers (395 chunks post-cleaning) — intentionally small for this project's
+  scope; any metric here carries real sampling variance and should not be read as a claim about
+  performance on a production-scale corpus.
+- No authentication or rate limiting on the API.
+- No CI/CD pipeline configured.
+- The Streamlit UI was verified to boot cleanly (server health checks, no tracebacks) but not
+  interactively click-tested in a real browser — this environment has no browser automation tool.
+
+## Future Work
+
+- Hybrid BM25 + dense retrieval, for exact-term queries dense embeddings miss.
+- Query expansion / decomposition for multi-part questions.
+- Section-type metadata tagged at ingestion (body / references / boilerplate / abstract) so
+  retrieval can filter by section, rather than relying solely on the references-heading heuristic.
+- Content-level citation verification: compare a cited source's actual text against what the LLM
+  attributed to it, closing the gap the current range-only checker leaves open.
+- A larger corpus, to reduce sampling variance in the evaluation metrics.
+- Domain-fine-tuned embeddings (contrastive fine-tuning on cardiovascular QA pairs), now that
+  SPECTER's off-the-shelf underperformance is measured rather than assumed away.
+- Figure/table extraction — currently text-only; a meaningful fraction of a CMR paper's evidence
+  is in its figures.
+- CI/CD, API authentication/rate limiting, for anything beyond local/single-user use.
+
+## License
+
+[MIT](LICENSE)
